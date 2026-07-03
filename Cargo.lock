@@ -67,7 +67,7 @@ dependencies = [
 [[package]]
 name = "bread-theme"
 version = "0.2.3"
-source = "git+https://github.com/Breadway/bread-ecosystem?tag=v0.2.9#10f62fb1a62fc5ca4eab90ae5e1bfc8cd9bf9fc9"
+source = "git+https://github.com/Breadway/bread-ecosystem?tag=v0.2.10#17d1bb85801b9a8c195b64c02d288cd662c9c780"
 dependencies = [
  "dirs",
  "gtk4",
@@ -77,7 +77,7 @@ dependencies = [
 
 [[package]]
 name = "breadgreet"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bread-theme",
  "breadlock-ui",
@@ -95,7 +95,7 @@ dependencies = [
 
 [[package]]
 name = "breadlock"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "breadlock-ui",
  "chrono",
@@ -112,7 +112,7 @@ dependencies = [
 
 [[package]]
 name = "breadlock-ui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bread-theme",
  "chrono",
