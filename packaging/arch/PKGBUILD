@@ -1,0 +1,41 @@
+# Maintainer: Breadway <rileyhorsham@gmail.com>
+
+pkgname=breadlock
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Session locker and greetd greeter for Hyprland / Wayland"
+arch=('x86_64')
+url="https://github.com/Breadway/breadlock"
+license=('MIT')
+# Some Rust deps build vendored C/asm into static archives; makepkg's default
+# -flto=auto emits GCC LTO bitcode the Rust (lld) link cannot read, causing
+# undefined-symbol errors. Disable LTO. (Same issue as breadbar/breadbox.)
+options=(!lto !debug)
+depends=('pam' 'wayland' 'libxkbcommon' 'gtk4')
+optdepends=(
+  'cage: minimal Wayland compositor to host breadgreet under greetd'
+  'hyprland: the session breadlock protects and breadgreet launches'
+)
+makedepends=('rust' 'cargo')
+source=("${pkgname}-${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+  # --bin (not -p breadlock) deliberately excludes the breadlock-auth-check
+  # dev harness, which shares the breadlock package but isn't installed.
+  cargo build --release --locked --bin breadlock --bin breadgreet
+}
+
+check() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+  cargo test --release --locked --workspace
+}
+
+package() {
+  cd "${srcdir}/${pkgname}-${pkgver}"
+  install -Dm755 target/release/breadlock  "${pkgdir}/usr/bin/breadlock"
+  install -Dm755 target/release/breadgreet "${pkgdir}/usr/bin/breadgreet"
+  install -Dm644 packaging/pam.d/breadlock "${pkgdir}/etc/pam.d/breadlock"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

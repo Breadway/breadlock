@@ -1,0 +1,15 @@
+name = "breadlock"
+description = "Session locker and greetd greeter for Hyprland / Wayland"
+binaries = ["breadlock", "breadgreet"]
+system_deps = ["pam", "wayland", "libxkbcommon", "gtk4"]
+optional_system_deps = ["cage", "hyprland"]
+bread_deps = []
+
+[config]
+dir = "~/.config/breadlock"
+example = "breadlock.example.toml"
+
+[install]
+post_install = [
+    "echo 'breadlock installed. /etc/pam.d/breadlock is installed by the package; wiring greetd (cage -s -- breadgreet) and a lock keybind/hypridle is a separate manual step.'",
+]

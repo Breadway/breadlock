@@ -1,0 +1,31 @@
+[package]
+name = "breadlock"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Breadway <rileyhorsham@gmail.com>"]
+description = "Session locker for Hyprland / Wayland (ext-session-lock-v1)"
+
+[[bin]]
+name = "breadlock"
+path = "src/main.rs"
+
+# Dev-only harness: exercises the PAM auth flow against a typed password with
+# no Wayland surface involved at all — see the "safe verification" plan in
+# the repo's design notes. Not installed by the package.
+[[bin]]
+name = "breadlock-auth-check"
+path = "src/bin/breadlock-auth-check.rs"
+
+[dependencies]
+breadlock-ui = { path = "../breadlock-ui", features = ["paint"] }
+smithay-client-toolkit = "0.20"
+wayland-client = "0.31"
+tiny-skia = "0.12"
+chrono = "0.4"
+pam-client2 = { version = "0.5", default-features = false }
+serde.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true

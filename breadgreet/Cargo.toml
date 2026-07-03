@@ -1,0 +1,25 @@
+[package]
+name = "breadgreet"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Breadway <rileyhorsham@gmail.com>"]
+description = "Graphical greetd greeter for Hyprland / Wayland"
+
+[[bin]]
+name = "breadgreet"
+path = "src/main.rs"
+
+[dependencies]
+breadlock-ui = { path = "../breadlock-ui" }
+bread-theme = { workspace = true, features = ["gtk"] }
+gtk4 = { version = "0.11", features = ["v4_12"] }
+relm4 = { version = "0.11", features = ["macros"] }
+greetd_ipc = { version = "0.10", default-features = false, features = ["tokio-codec"] }
+chrono = "0.4"
+tokio.workspace = true
+serde.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true

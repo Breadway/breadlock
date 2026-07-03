@@ -1,0 +1,22 @@
+# Copy to ~/.config/breadlock/breadlock.toml — every field is optional and
+# defaults to the value shown here if omitted or the file doesn't exist.
+
+[background]
+# "color" (bread-theme palette background) or "image" (a PNG, cover-fit)
+mode = "color"
+path = ""
+# v2 feature — accepted but currently just logs a warning and shows the
+# background unblurred (needs a wlr-screencopy capture, not implemented yet).
+blur = false
+
+[clock]
+# strftime format
+format = "%H:%M"
+
+[font]
+family = "Varela Round"
+
+[input]
+# How long the "wrong password" state (red pill) shows before input
+# re-enables, in milliseconds.
+fail_timeout_ms = 800

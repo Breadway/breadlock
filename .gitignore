@@ -1,0 +1,21 @@
+/target/
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Claude Code session data
+.claude/

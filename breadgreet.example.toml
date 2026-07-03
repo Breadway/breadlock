@@ -1,0 +1,26 @@
+# breadgreet commonly runs as the dedicated `greeter` system user (per
+# greetd's own convention), so it checks /etc/greetd/breadgreet.toml first;
+# copy this there for a real install. For local dev/testing under a normal
+# user session it falls back to ~/.config/breadgreet/breadgreet.toml.
+#
+# Every field is optional and defaults to the value shown here.
+
+[background]
+mode = "color"
+path = ""
+blur = false
+
+[clock]
+format = "%H:%M"
+
+[font]
+family = "Varela Round"
+
+[sessions]
+# Directories scanned for .desktop session entries, in order.
+wayland_dirs = ["/usr/share/wayland-sessions"]
+xsessions_dirs = ["/usr/share/xsessions"]
+# .desktop file stem (without extension) to auto-select. Falls back to the
+# first entry found if this isn't present. v1 has no session picker UI —
+# BOS only ships one session (Hyprland) today.
+default = "hyprland"

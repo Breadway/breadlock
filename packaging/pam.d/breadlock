@@ -1,0 +1,12 @@
+#%PAM-1.0
+# Installed to /etc/pam.d/breadlock by the breadlock package.
+#
+# Mirrors this stack's real system-auth (so pam_faillock lockout protection
+# applies here too) rather than the thinner `login`-only include some lock
+# screens use. The extra `session` line avoids a known pam_end()-on-
+# uninitialized-handle crash class seen in minimal PAM files for lock
+# screens; breadlock never opens a real session (the graphical session is
+# already open), so no `session required pam_unix.so` line is needed.
+auth       include      system-auth
+account    include      system-auth
+session    optional     pam_keyinit.so force revoke
