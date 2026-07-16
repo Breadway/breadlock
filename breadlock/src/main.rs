@@ -57,8 +57,24 @@ fn main() {
                 state.exit = true;
             }
             Err(err) => {
-                tracing::warn!(%err, "authentication failed");
-                state.auth_state = AuthState::Failed;
+                match err {
+                    // A broken PAM setup (missing/invalid /etc/pam.d/breadlock,
+                    // context init failure) is a config problem, not a typo —
+                    // rendering it identically to "wrong password" would lock
+                    // the user out with zero indication of what's actually
+                    // wrong. Log loudly and show a distinct on-screen message.
+                    auth::AuthError::ContextInit => {
+                        tracing::error!(
+                            %err,
+                            "PAM context initialization failed — check /etc/pam.d/breadlock exists and is valid; authentication cannot succeed until this is fixed"
+                        );
+                        state.auth_state = AuthState::ConfigError;
+                    }
+                    auth::AuthError::Authenticate | auth::AuthError::AccountInvalid => {
+                        tracing::warn!(%err, "authentication failed");
+                        state.auth_state = AuthState::Failed;
+                    }
+                }
                 state.schedule_clear_failed(auth_result_qh.clone());
             }
         }
@@ -88,7 +104,10 @@ fn main() {
         background,
         text_renderer: breadlock_ui::painter::TextRenderer::new(),
         username,
-        password: String::new(),
+        // Pre-reserve capacity so ordinary typing doesn't reallocate — a
+        // reallocation leaves the old (unzeroized) backing buffer, with the
+        // password bytes still in it, on the heap.
+        password: zeroize::Zeroizing::new(String::with_capacity(128)),
         auth_state: AuthState::Idle,
         auth_tx,
         exit: false,
@@ -107,6 +126,7 @@ fn main() {
         let lock_surface = session_lock.create_lock_surface(surface, &output, &qh);
         app_state.surfaces.push(LockSurface {
             surface: lock_surface,
+            output,
             width: 0,
             height: 0,
         });
@@ -129,15 +149,48 @@ fn main() {
         )
         .expect("failed to register the clock-tick timer");
 
+    // A dispatch error here is the one path that can end this process while
+    // the session lock is still up: `SessionLockInner::drop` deliberately
+    // does *not* send `unlock`, only `destroy` (see the crate's own doc
+    // comment — "choosing not to unlock here results in us failing secure"),
+    // so an abrupt exit stays fail-secure at the protocol level; the failure
+    // mode is a frozen/unusable lock screen (Hyprland's "lock client
+    // crashed" state), not an unlocked one. We do NOT call `.unlock()` from
+    // here — doing so on an error path would make an unattended failure
+    // capable of unlocking the session, i.e. turn a fail-secure bug into a
+    // fail-open one. Instead: tolerate a burst of transient errors (a single
+    // `dispatch()` hiccup shouldn't be fatal) and only give up, loudly, after
+    // several consecutive failures.
+    const MAX_CONSECUTIVE_DISPATCH_ERRORS: u32 = 5;
+    let mut consecutive_errors = 0u32;
     while !app_state.exit {
-        if let Err(err) = event_loop.dispatch(Duration::from_millis(250), &mut app_state) {
-            tracing::error!(%err, "event loop dispatch failed");
-            break;
+        match event_loop.dispatch(Duration::from_millis(250), &mut app_state) {
+            Ok(()) => consecutive_errors = 0,
+            Err(err) => {
+                consecutive_errors += 1;
+                tracing::error!(
+                    %err,
+                    consecutive_errors,
+                    "event loop dispatch failed — session remains locked (fail-secure); \
+                     if this persists the lock screen may become unresponsive and require \
+                     a VT switch or `loginctl` to recover"
+                );
+                if consecutive_errors >= MAX_CONSECUTIVE_DISPATCH_ERRORS {
+                    tracing::error!(
+                        "giving up after {consecutive_errors} consecutive dispatch failures; \
+                         exiting WITHOUT unlocking — this is intentional (fail-secure), but \
+                         the screen will likely be stuck and need a VT switch to recover"
+                    );
+                    break;
+                }
+            }
         }
     }
 
     // Make sure the compositor actually receives the unlock/destroy
-    // requests queued above before the process exits.
+    // requests queued above (from a successful auth) before the process
+    // exits. This is a no-op if we got here via the dispatch-error path
+    // above, since nothing queued an unlock in that case.
     let _ = app_state.conn.roundtrip();
 }
 

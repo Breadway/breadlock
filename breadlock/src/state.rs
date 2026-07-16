@@ -9,7 +9,7 @@ use smithay_client_toolkit::seat::SeatState;
 use smithay_client_toolkit::session_lock::{SessionLock, SessionLockState, SessionLockSurface};
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use std::time::Duration;
-use wayland_client::protocol::{wl_keyboard, wl_shm};
+use wayland_client::protocol::{wl_keyboard, wl_output, wl_shm};
 use wayland_client::{Connection, QueueHandle};
 
 use crate::auth::AuthResult;
@@ -18,9 +18,12 @@ use crate::config::Config;
 use crate::render;
 
 /// Per-output lock surface plus the size the compositor last `configure`d it
-/// to (0x0 until the first configure arrives).
+/// to (0x0 until the first configure arrives). `output` is kept so
+/// `output_destroyed` can find and drop the surface belonging to an unplugged
+/// monitor — without it, hotplug/unplug cycles only ever grow `surfaces`.
 pub struct LockSurface {
     pub surface: SessionLockSurface,
+    pub output: wl_output::WlOutput,
     pub width: u32,
     pub height: u32,
 }
@@ -31,7 +34,16 @@ pub enum AuthState {
     /// A PAM check is running on its own thread; input is ignored until it
     /// resolves so a second Enter can't race the first attempt.
     Checking,
+    /// The password (or account state) was rejected by PAM — an ordinary
+    /// wrong-password/locked-account outcome the user can retry.
     Failed,
+    /// PAM itself failed to initialize (e.g. `/etc/pam.d/breadlock` is
+    /// missing or unreadable) — this is a config/deployment problem, not
+    /// something the user's password can fix. Rendered with a distinct
+    /// message so a broken install doesn't look like an endless string of
+    /// typos with no way to discover the real cause. See `main.rs`'s
+    /// auth-result callback, which is the only place this is set.
+    ConfigError,
 }
 
 pub struct AppState {
@@ -53,7 +65,13 @@ pub struct AppState {
     pub text_renderer: breadlock_ui::painter::TextRenderer,
 
     pub username: String,
-    pub password: String,
+    /// Wrapped in `Zeroizing` so the buffer is wiped on every drop/replace
+    /// (e.g. when `submit()` swaps in a fresh one) rather than just
+    /// deallocated with the password bytes left sitting in freed heap
+    /// memory. Individual edits (backspace, clear) still need their own
+    /// explicit zeroing — see `input/keyboard.rs` — since `Zeroizing` only
+    /// hooks `Drop`, not in-place mutation.
+    pub password: zeroize::Zeroizing<String>,
     pub auth_state: AuthState,
     pub auth_tx: Sender<AuthResult>,
 
@@ -81,6 +99,9 @@ impl AppState {
         let status_text = match self.auth_state {
             AuthState::Checking => Some("Checking…".to_string()),
             AuthState::Failed => Some("Wrong password".to_string()),
+            AuthState::ConfigError => {
+                Some("PAM config error — check logs (breadlock service not set up correctly)".to_string())
+            }
             AuthState::Idle => None,
         };
 
@@ -92,7 +113,7 @@ impl AppState {
             font_family: &self.config.appearance.font.family,
             clock_text: &clock_text,
             password_len: self.password.len(),
-            failed: self.auth_state == AuthState::Failed,
+            failed: matches!(self.auth_state, AuthState::Failed | AuthState::ConfigError),
             status_text: status_text.as_deref(),
         };
 
@@ -151,7 +172,7 @@ impl AppState {
         let _ =
             self.loop_handle
                 .insert_source(Timer::from_duration(timeout), move |_, _, state| {
-                    if state.auth_state == AuthState::Failed {
+                    if matches!(state.auth_state, AuthState::Failed | AuthState::ConfigError) {
                         state.auth_state = AuthState::Idle;
                         state.redraw_all(&qh);
                     }

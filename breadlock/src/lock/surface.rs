@@ -73,6 +73,7 @@ impl OutputHandler for AppState {
         let lock_surface = session_lock.create_lock_surface(surface, &output, qh);
         self.surfaces.push(LockSurface {
             surface: lock_surface,
+            output,
             width: 0,
             height: 0,
         });
@@ -86,11 +87,16 @@ impl OutputHandler for AppState {
     ) {
     }
 
+    /// A monitor disappeared (unplug, or Hyprland dropping/recreating it on
+    /// a mode change). Drop the lock surface tied to it — otherwise
+    /// `surfaces` only ever grows across hotplug cycles and `redraw_all`
+    /// keeps trying to commit to a surface whose output is gone.
     fn output_destroyed(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
+        output: wl_output::WlOutput,
     ) {
+        self.surfaces.retain(|s| s.output != output);
     }
 }

@@ -35,8 +35,14 @@ pub fn register<Data: 'static>(
 /// Spawns a PAM check for `username`/`password` on its own thread; the
 /// outcome arrives later as an event on the loop registered via
 /// [`register`]. `password` is moved in and dropped as soon as the PAM
-/// conversation consumes it — it is never logged.
-pub fn spawn_check(username: String, password: String, result_tx: Sender<AuthResult>) {
+/// conversation consumes it — it is never logged. It's a `Zeroizing<String>`
+/// so the buffer is wiped the moment it goes out of scope at the end of this
+/// closure, rather than just deallocated with the bytes intact.
+pub fn spawn_check(
+    username: String,
+    password: zeroize::Zeroizing<String>,
+    result_tx: Sender<AuthResult>,
+) {
     std::thread::spawn(move || {
         let result = pam::check(&username, &password);
         let _ = result_tx.send(result);

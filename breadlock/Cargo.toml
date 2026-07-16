@@ -24,6 +24,7 @@ wayland-client = "0.31"
 tiny-skia = "0.12"
 chrono = "0.4"
 pam-client2 = { version = "0.5", default-features = false }
+zeroize = { version = "1", features = ["std"] }
 serde.workspace = true
 toml.workspace = true
 tracing.workspace = true
