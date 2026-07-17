@@ -54,7 +54,7 @@ sudo pacman -S gtk4 wayland libxkbcommon pam rust cargo
 
 ## Packaging
 
-`packaging/arch/PKGBUILD` builds and installs both binaries plus `/etc/pam.d/breadlock`. `bakery.toml` is the bread-ecosystem package index entry.
+`packaging/arch/PKGBUILD` builds and installs both binaries plus `/etc/pam.d/breadlock`, published to the `[breadway]` pacman repo by `.forgejo/workflows/package.yml`. breadlock is pacman-only — it is not in bread-ecosystem's registry and has no `bakery.toml`; a PAM/greeter component gets installed through the package manager, not the bakery curl-script channel.
 
 **Not included, by design**: this repo does not touch `/etc/greetd/config.toml`, install a lock keybind, or wire up `hypridle`. Once packaged, wiring BOS to actually use these binaries means:
 
