@@ -3,7 +3,7 @@ name = "breadgreet"
 version = "0.1.1"
 edition = "2021"
 license = "MIT"
-authors = ["Breadway <rileyhorsham@gmail.com>"]
+authors = ["Breadway <plasticbread849@gmail.com>"]
 description = "Graphical greetd greeter for Hyprland / Wayland"
 
 [[bin]]

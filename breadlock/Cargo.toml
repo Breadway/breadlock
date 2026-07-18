@@ -3,7 +3,7 @@ name = "breadlock"
 version = "0.1.1"
 edition = "2021"
 license = "MIT"
-authors = ["Breadway <rileyhorsham@gmail.com>"]
+authors = ["Breadway <plasticbread849@gmail.com>"]
 description = "Session locker for Hyprland / Wayland (ext-session-lock-v1)"
 
 [[bin]]

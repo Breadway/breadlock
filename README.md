@@ -7,7 +7,7 @@ Two binaries, one workspace:
 - **`breadlock`** — locks the *already running* Hyprland session via `ext-session-lock-v1`. Drop-in for `hyprlock`.
 - **`breadgreet`** — a graphical greeter that speaks `greetd`'s own IPC protocol (the same architecture as `gtkgreet`/`regreet`). `greetd` keeps owning PAM auth, VT switching, and session launching; `breadgreet` only draws the login UI and relays the conversation. This is a deliberate choice over reimplementing a display manager from scratch — `greetd` is already installed and battle-tested.
 
-Both use [`bread-theme`](https://github.com/Breadway/bread-ecosystem) for palette loading, matching the rest of the bread* ecosystem (breadbar, breadbox, bos-settings).
+Both use [`bread-theme`](https://git.breadway.dev/Breadway/bread-ecosystem) for palette loading, matching the rest of the bread* ecosystem (breadbar, breadbox, bos-settings).
 
 ## Architecture
 

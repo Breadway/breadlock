@@ -1,11 +1,11 @@
-# Maintainer: Breadway <rileyhorsham@gmail.com>
+# Maintainer: Breadway <plasticbread849@gmail.com>
 
 pkgname=breadlock
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Session locker and greetd greeter for Hyprland / Wayland"
 arch=('x86_64')
-url="https://github.com/Breadway/breadlock"
+url="https://git.breadway.dev/Breadway/breadlock"
 license=('MIT')
 # Some Rust deps build vendored C/asm into static archives; makepkg's default
 # -flto=auto emits GCC LTO bitcode the Rust (lld) link cannot read, causing
