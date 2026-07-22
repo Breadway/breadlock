@@ -19,3 +19,6 @@ Thumbs.db
 
 # Claude Code session data
 .claude/
+
+# Local hygiene notes (not for commit)
+CLAUDE.md
