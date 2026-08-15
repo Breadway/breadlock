@@ -5,12 +5,14 @@
 //! process) so a missing or restarting breadd never affects locking
 //! itself.
 //!
-//! `bread.command.lock.lock` is the one verb this process honors. The
-//! locker subscribes while the session is locked (already-locked is
-//! `bread.lock.lock.done`). `breadlock listen` is the unlocked-path
-//! subscriber: it starts this same binary the way hypridle's
-//! `lock_cmd = breadlock` does. Session-level equivalent of Super+L is
-//! `loginctl lock-session`.
+//! `bread.command.lock.lock` and `bread.command.lock.unlock` are the
+//! verbs this process honors. The locker subscribes while the session is
+//! locked (already-locked is `bread.lock.lock.done`). `breadlock listen`
+//! is the unlocked-path subscriber: it starts this same binary the way
+//! hypridle's `lock_cmd = breadlock` does, and treats unlock as already
+//! unlocked (`bread.lock.unlock.done`). Session-level equivalents are
+//! `loginctl lock-session` / `loginctl unlock-session`. Unlock never
+//! calls compositor `unlock()` — that stays on the PAM path.
 
 use std::process::{Command, Stdio};
 use std::thread;
@@ -42,6 +44,17 @@ pub fn emit_lock_done() {
 pub fn emit_lock_failed(error: &str) {
     BreadClient::connect(APP_ID).emit(
         "bread.lock.lock.failed",
+        serde_json::json!({ "error": error }),
+    );
+}
+
+pub fn emit_unlock_done() {
+    BreadClient::connect(APP_ID).emit("bread.lock.unlock.done", serde_json::json!({}));
+}
+
+pub fn emit_unlock_failed(error: &str) {
+    BreadClient::connect(APP_ID).emit(
+        "bread.lock.unlock.failed",
         serde_json::json!({ "error": error }),
     );
 }
@@ -84,6 +97,31 @@ pub fn honor_lock_command() {
     honor_lock_command_with(start_locker);
 }
 
+/// Session-level unlock (`loginctl unlock-session` on the caller's
+/// session). Does not send compositor `unlock` and does not skip PAM —
+/// that stays on the typed-password path. `done` means the command was
+/// acted on (or the session was already unlocked), not that
+/// `ext-session-lock-v1` has been released — wait on
+/// `bread.lock.unlocked` for the compositor confirmation.
+fn unlock_session() -> Result<(), String> {
+    let status = Command::new("loginctl")
+        .arg("unlock-session")
+        .stdin(Stdio::null())
+        .status()
+        .map_err(|e| format!("failed to run loginctl unlock-session: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("loginctl unlock-session exited with {status}"))
+    }
+}
+
+/// Honor `bread.command.lock.unlock`: already unlocked is success;
+/// otherwise ask logind to unlock this session.
+pub fn honor_unlock_command() {
+    honor_unlock_command_with(locker_is_running(), unlock_session);
+}
+
 fn honor_lock_command_with(start: impl FnOnce() -> Result<(), String>) {
     if locker_is_running() {
         tracing::info!("bread.command.lock.lock: already locked");
@@ -102,6 +140,24 @@ fn honor_lock_command_with(start: impl FnOnce() -> Result<(), String>) {
     }
 }
 
+fn honor_unlock_command_with(locked: bool, unlock: impl FnOnce() -> Result<(), String>) {
+    if !locked {
+        tracing::info!("bread.command.lock.unlock: already unlocked");
+        emit_unlock_done();
+        return;
+    }
+    match unlock() {
+        Ok(()) => {
+            tracing::info!("bread.command.lock.unlock: loginctl unlock-session");
+            emit_unlock_done();
+        }
+        Err(error) => {
+            tracing::error!(%error, "bread.command.lock.unlock: failed");
+            emit_unlock_failed(&error);
+        }
+    }
+}
+
 /// Reacts to `bread.command.lock.*`. Unknown verbs are ignored, not stubbed.
 pub fn handle_command(event: &BreadEvent) {
     let Some(verb) = event.event.strip_prefix("bread.command.lock.") else {
@@ -109,6 +165,7 @@ pub fn handle_command(event: &BreadEvent) {
     };
     match verb {
         "lock" => honor_lock_command(),
+        "unlock" => honor_unlock_command(),
         other => tracing::info!(verb = other, "ignoring unknown bread.command.lock verb"),
     }
 }
@@ -135,7 +192,6 @@ mod tests {
 
     #[test]
     fn handle_command_ignores_unrecognized_verb() {
-        handle_command(&event("bread.command.lock.unlock"));
         handle_command(&event("bread.command.lock.pin"));
         handle_command(&event("bread.command.clip.clear"));
         handle_command(&event("bread.lock.locked"));
@@ -167,5 +223,25 @@ mod tests {
     #[test]
     fn honor_lock_command_with_successful_start_does_not_panic() {
         honor_lock_command_with(|| Ok(()));
+    }
+
+    #[test]
+    fn honor_unlock_command_already_unlocked_does_not_call_loginctl() {
+        let called = std::cell::Cell::new(false);
+        honor_unlock_command_with(false, || {
+            called.set(true);
+            Err("should not run".into())
+        });
+        assert!(!called.get());
+    }
+
+    #[test]
+    fn honor_unlock_command_with_failed_loginctl_does_not_panic() {
+        honor_unlock_command_with(true, || Err("boom".into()));
+    }
+
+    #[test]
+    fn honor_unlock_command_with_successful_loginctl_does_not_panic() {
+        honor_unlock_command_with(true, || Ok(()));
     }
 }

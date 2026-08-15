@@ -51,9 +51,9 @@ fn print_usage() {
         "Usage: breadlock [listen]\n\
          \n\
          (no args)   lock this session — hypridle lock_cmd / Super+L via loginctl lock-session\n\
-         listen      subscribe to bread.command.lock.lock so the command works while unlocked\n\
+         listen      subscribe to bread.command.lock.lock / unlock so both work while unlocked\n\
          \n\
-         Session-level equivalent of Super+L: loginctl lock-session (hypridle then runs breadlock).\n\
+         Session-level: loginctl lock-session / unlock-session.\n\
          See EVENTS.md for the bus contract."
     );
 }
@@ -75,10 +75,11 @@ fn main() {
     }
 }
 
-/// Long-running subscriber so `bread.command.lock.lock` works while the
-/// session is unlocked. The locker process also subscribes; this path is
-/// what actually starts breadlock (the same no-args invocation hypridle
-/// uses). One listen process per session.
+/// Long-running subscriber so `bread.command.lock.lock` / `.unlock` work
+/// while the session is unlocked. The locker process also subscribes;
+/// this path is what actually starts breadlock (the same no-args
+/// invocation hypridle uses) and what runs `loginctl unlock-session`
+/// when a locker is up. One listen process per session.
 fn run_listen() {
     let _guard = match try_acquire(bread_events::LISTEN_APP) {
         Ok(Acquire::Acquired(g)) => g,
@@ -106,7 +107,7 @@ fn run_listen() {
     }
 
     let _commands = bread_events::subscribe_commands();
-    tracing::info!("listening for bread.command.lock.lock");
+    tracing::info!("listening for bread.command.lock.lock / unlock");
     loop {
         std::thread::sleep(Duration::from_secs(3600));
     }
@@ -127,8 +128,9 @@ fn run_lock() {
         }
     };
 
-    // Honor bread.command.lock.lock while this locker is up (already-locked
-    // is bread.lock.lock.done). Unlocked commands need `breadlock listen`.
+    // Honor bread.command.lock.lock / unlock while this locker is up
+    // (already-locked is bread.lock.lock.done; unlock is loginctl, not
+    // compositor unlock()). Unlocked-path commands need `breadlock listen`.
     let _commands = bread_events::subscribe_commands();
 
     let username = std::env::var("USER")
