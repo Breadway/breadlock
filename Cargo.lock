@@ -66,8 +66,8 @@ dependencies = [
 
 [[package]]
 name = "bread-theme"
-version = "0.2.3"
-source = "git+https://github.com/Breadway/bread-ecosystem?tag=v0.2.10#17d1bb85801b9a8c195b64c02d288cd662c9c780"
+version = "0.3.1"
+source = "git+https://git.breadway.dev/Breadway/bread-ecosystem?tag=v0.7.1#db2fa3c4b4c1e6933bc5cf62a236d05972fdc886"
 dependencies = [
  "dirs",
  "gtk4",
