@@ -12,7 +12,7 @@ service, which bakery cannot install. Don't add one. Releases are `v*`
 tags that fire `.forgejo/workflows/package.yml` into the `[breadway]`
 pacman repo. There are no bakery tracks.
 
-See `CLAUDE.md` (local hygiene notes) for remotes and CI details.
+See `AGENTS.md` for remotes and CI details.
 
 ## Local development
 
