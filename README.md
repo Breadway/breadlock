@@ -12,9 +12,14 @@ Both use [`bread-theme`](https://git.breadway.dev/Breadway/bread-ecosystem) for 
 ## bread event integration
 
 `breadlock` works the same with or without `breadd`. When `breadd` is
-running, it publishes `bread.lock.locked` / `bread.lock.unlocked`. See
-[EVENTS.md](EVENTS.md) for the bus contract. `breadgreet` is not on the
-bus. There is no `bakery.toml` (PAM / pacman exception).
+running, it publishes `bread.lock.locked` / `bread.lock.unlocked` and
+honors `bread.command.lock.lock` (emits `bread.lock.lock.done` /
+`.failed`). Run `breadlock listen` so the command works while unlocked;
+the locker also subscribes while the session is locked. Super+L remains
+`loginctl lock-session` (hypridle then runs `breadlock`) — that is the
+session-level equivalent, not a bus command. See [EVENTS.md](EVENTS.md).
+`breadgreet` is not on the bus. There is no `bakery.toml` (PAM / pacman
+exception).
 
 ## Architecture
 
@@ -75,6 +80,11 @@ command = "cage -s -- breadgreet"
 # hypridle lock_cmd (BOS). SUPER+L is loginctl lock-session, which hypridle picks up.
 lock_cmd = breadlock
 ```
+
+`breadlock listen` is the unlocked-path subscriber for
+`bread.command.lock.lock`. It is not started by hypridle; add it to
+session startup (`exec-once = breadlock listen`) if a Lua workflow
+should be able to lock the session while it is unlocked.
 
 ## Verification (why this is safe to test without a lockout risk)
 

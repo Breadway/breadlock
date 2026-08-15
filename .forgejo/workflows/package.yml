@@ -7,10 +7,10 @@ on:
 jobs:
   package:
     runs-on: [self-hosted, hestia]
-    # Forgejo's Arch package registry does not GPG-sign packages for pacman.
-    # BOS therefore uses SigLevel=Never on [Breadway.os.git.breadway.dev]
-    # until a signed repo exists. Keep publishing here — do not flip this
-    # job to a different registry just to get signatures.
+    # Forgejo's Arch package registry does not GPG-sign a pacman db.
+    # BOS ISO [breadway] stays SigLevel = Never until a signed db exists.
+    # Do not flip that here — flipping without a signed db breaks pacman.
+    # Keep publishing the unsigned .pkg.tar.zst to the registry below.
     container:
       image: archlinux:latest
     steps:
@@ -37,8 +37,50 @@ jobs:
           # --nocheck: packaging builds the artifact; tests belong in a CI job.
           su builder -c "cd /home/builder/src/packaging/arch && makepkg -f --noconfirm --nocheck"
           PKG=$(find /home/builder/src/packaging/arch -name '*.pkg.tar.zst' | head -1)
+          mkdir -p /tmp/breadlock-pkg
+          cp "$PKG" /tmp/breadlock-pkg/
+          echo "${VERSION}" > /tmp/breadlock-pkg/VERSION
           curl -fsS -X PUT \
             -H "Authorization: token ${PUBLISH_TOKEN}" \
             -H "Content-Type: application/octet-stream" \
             --data-binary "@${PKG}" \
             "https://git.breadway.dev/api/packages/Breadway/arch/os"
+
+      # Optional detach-sign. secrets.GPG_PRIVATE_KEY is the same BOS
+      # release-signing key (releases@breadway.dev). If the secret is
+      # missing, skip — the registry PUT above already published the
+      # unsigned package. A lone .sig is not a signed repo: ISO
+      # [breadway] stays SigLevel = Never until a signed db exists.
+      # The .sig is uploaded as a generic-package artifact next to that
+      # PUT, not injected into the Arch repo (which would not make
+      # pacman verify anything without a signed db).
+      - name: Detach-sign package (optional)
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          PUBLISH_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
+            echo "GPG_PRIVATE_KEY unset; skipping detach-sign."
+            echo "ISO [breadway] stays SigLevel = Never until a signed db exists."
+            exit 0
+          fi
+          PKG=$(find /tmp/breadlock-pkg -name '*.pkg.tar.zst' | head -1)
+          if [ -z "$PKG" ]; then
+            echo "no package in /tmp/breadlock-pkg; cannot sign" >&2
+            exit 1
+          fi
+          VERSION=$(cat /tmp/breadlock-pkg/VERSION)
+          pacman -S --noconfirm --needed gnupg
+          export GNUPGHOME=/tmp/gnupg-breadlock
+          mkdir -m 700 -p "$GNUPGHOME"
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --batch --yes --detach-sign -o "${PKG}.sig" "$PKG"
+          echo "Signed $(basename "$PKG") -> $(basename "$PKG").sig"
+          # Generic package: workflow artifact alongside the Arch PUT.
+          # Does not change [breadway] / pacman SigLevel.
+          curl -fsS -X PUT \
+            -H "Authorization: token ${PUBLISH_TOKEN}" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary "@${PKG}.sig" \
+            "https://git.breadway.dev/api/packages/Breadway/generic/breadlock/${VERSION}/$(basename "$PKG").sig"

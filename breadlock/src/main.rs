@@ -21,12 +21,115 @@ use wayland_client::globals::registry_queue_init;
 use wayland_client::{protocol::wl_buffer, Connection, QueueHandle};
 
 use background::Background;
+use bread_utils::singleton::{try_acquire, Acquire};
 use state::{AppState, AuthState, LockSurface};
+
+#[derive(Debug, PartialEq, Eq)]
+enum Mode {
+    Lock,
+    Listen,
+    Help,
+}
+
+fn parse_mode<I, S>(args: I) -> Result<Mode, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut args = args.into_iter();
+    match args.next().as_ref().map(|s| s.as_ref()) {
+        None => Ok(Mode::Lock),
+        Some("listen") if args.next().is_none() => Ok(Mode::Listen),
+        Some("-h" | "--help" | "help") => Ok(Mode::Help),
+        Some("listen") => Err("listen takes no arguments".into()),
+        Some(other) => Err(format!("unknown argument '{other}'")),
+    }
+}
+
+fn print_usage() {
+    eprintln!(
+        "Usage: breadlock [listen]\n\
+         \n\
+         (no args)   lock this session — hypridle lock_cmd / Super+L via loginctl lock-session\n\
+         listen      subscribe to bread.command.lock.lock so the command works while unlocked\n\
+         \n\
+         Session-level equivalent of Super+L: loginctl lock-session (hypridle then runs breadlock).\n\
+         See EVENTS.md for the bus contract."
+    );
+}
 
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+
+    match parse_mode(std::env::args().skip(1)) {
+        Ok(Mode::Lock) => run_lock(),
+        Ok(Mode::Listen) => run_listen(),
+        Ok(Mode::Help) => print_usage(),
+        Err(err) => {
+            eprintln!("breadlock: {err}");
+            print_usage();
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Long-running subscriber so `bread.command.lock.lock` works while the
+/// session is unlocked. The locker process also subscribes; this path is
+/// what actually starts breadlock (the same no-args invocation hypridle
+/// uses). One listen process per session.
+fn run_listen() {
+    let _guard = match try_acquire(bread_events::LISTEN_APP) {
+        Ok(Acquire::Acquired(g)) => g,
+        Ok(Acquire::HeldByOther(pid)) => {
+            tracing::info!(?pid, "breadlock listen already running");
+            return;
+        }
+        Err(err) => {
+            tracing::error!(%err, "failed to acquire listen singleton");
+            std::process::exit(1);
+        }
+    };
+
+    // Common when started early in the session (exec-once). The locker we
+    // spawn needs WAYLAND_DISPLAY; we stay up either way so a later command
+    // still has a subscriber.
+    for _ in 0..20 {
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        tracing::warn!("WAYLAND_DISPLAY not set; spawned breadlock will fail until it is");
+    }
+
+    let _commands = bread_events::subscribe_commands();
+    tracing::info!("listening for bread.command.lock.lock");
+    loop {
+        std::thread::sleep(Duration::from_secs(3600));
+    }
+}
+
+fn run_lock() {
+    let _locker_guard = match try_acquire(bread_events::APP_ID) {
+        Ok(Acquire::Acquired(g)) => Some(g),
+        Ok(Acquire::HeldByOther(pid)) => {
+            tracing::info!(?pid, "session already locked by another breadlock; exiting");
+            return;
+        }
+        Err(err) => {
+            // Refusing to lock because flock failed would be worse than
+            // running without the singleton — hypridle still needs a locker.
+            tracing::warn!(%err, "could not acquire lock singleton; continuing");
+            None
+        }
+    };
+
+    // Honor bread.command.lock.lock while this locker is up (already-locked
+    // is bread.lock.lock.done). Unlocked commands need `breadlock listen`.
+    let _commands = bread_events::subscribe_commands();
 
     let username = std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
@@ -204,3 +307,32 @@ smithay_client_toolkit::delegate_seat!(AppState);
 smithay_client_toolkit::delegate_keyboard!(AppState);
 smithay_client_toolkit::delegate_registry!(AppState);
 wayland_client::delegate_noop!(AppState: ignore wl_buffer::WlBuffer);
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_mode, Mode};
+
+    #[test]
+    fn parse_mode_no_args_is_lock() {
+        let args: [&str; 0] = [];
+        assert_eq!(parse_mode(args), Ok(Mode::Lock));
+    }
+
+    #[test]
+    fn parse_mode_listen() {
+        assert_eq!(parse_mode(["listen"]), Ok(Mode::Listen));
+    }
+
+    #[test]
+    fn parse_mode_help() {
+        assert_eq!(parse_mode(["--help"]), Ok(Mode::Help));
+        assert_eq!(parse_mode(["-h"]), Ok(Mode::Help));
+        assert_eq!(parse_mode(["help"]), Ok(Mode::Help));
+    }
+
+    #[test]
+    fn parse_mode_rejects_unknown_and_extra_listen_args() {
+        assert!(parse_mode(["unlock"]).is_err());
+        assert!(parse_mode(["listen", "--foreground"]).is_err());
+    }
+}
