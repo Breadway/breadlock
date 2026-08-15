@@ -20,7 +20,8 @@ family = "Varela Round"
 # Directories scanned for .desktop session entries, in order.
 wayland_dirs = ["/usr/share/wayland-sessions"]
 xsessions_dirs = ["/usr/share/xsessions"]
-# .desktop file stem (without extension) to auto-select. Falls back to the
-# first entry found if this isn't present. v1 has no session picker UI —
-# BOS only ships one session (Hyprland) today.
-default = "hyprland"
+# .desktop file stem (without extension) pre-selected in the picker.
+# Falls back to the first entry found if this isn't present. BOS ships
+# bos.desktop (Exec=bos-session); leaving this as "bos" is what the ISO
+# config expects so Hyprland's own hyprland.desktop is not picked first.
+default = "bos"

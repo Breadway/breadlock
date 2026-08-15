@@ -37,6 +37,8 @@ enum AppInput {
     Outcome(Outcome),
     Error(String),
     SessionStarted,
+    /// Picker changed; `u32::MAX` (`INVALID_LIST_POSITION`) is ignored.
+    SessionSelected(u32),
 }
 
 struct App {
@@ -45,7 +47,8 @@ struct App {
     entry: gtk4::Entry,
     stage: Stage,
     username: String,
-    session: Option<sessions::Session>,
+    sessions: Vec<sessions::Session>,
+    selected: usize,
     clock_format: String,
     cmd_tx: mpsc::UnboundedSender<GreetdCommand>,
 }
@@ -78,11 +81,19 @@ impl SimpleComponent for App {
         root.fullscreen();
 
         let config = config::load();
-        let session = sessions::discover(
+        let sessions = sessions::list(
+            &config.sessions.wayland_dirs,
+            &config.sessions.xsessions_dirs,
+        );
+        // Same default rule as `discover()`: configured stem (compiled-in
+        // `bos`), else the first listed session.
+        let selected = sessions::discover(
             &config.sessions.wayland_dirs,
             &config.sessions.xsessions_dirs,
             &config.sessions.default,
-        );
+        )
+        .and_then(|chosen| sessions.iter().position(|s| s.stem == chosen.stem))
+        .unwrap_or(0);
 
         let clock_lbl = gtk4::Label::new(None);
         clock_lbl.add_css_class("login-clock");
@@ -99,17 +110,33 @@ impl SimpleComponent for App {
         let status_lbl = gtk4::Label::new(None);
         status_lbl.add_css_class("login-status");
 
-        let session_lbl = gtk4::Label::new(session.as_ref().map(|s| s.name.as_str()));
-        session_lbl.add_css_class("login-session");
-        if session.is_none() {
-            session_lbl.set_label("No session found — cannot log in");
-        }
+        let session_widget: gtk4::Widget = if sessions.is_empty() {
+            let session_lbl = gtk4::Label::new(Some("No session found — cannot log in"));
+            session_lbl.add_css_class("login-session");
+            session_lbl.upcast()
+        } else {
+            let names: Vec<&str> = sessions.iter().map(|s| s.name.as_str()).collect();
+            let dropdown = gtk4::DropDown::from_strings(&names);
+            dropdown.add_css_class("login-session");
+            dropdown.set_hexpand(true);
+            dropdown.set_focusable(true);
+            dropdown.set_tooltip_text(Some("Session"));
+            dropdown.update_property(&[gtk4::accessible::Property::Label("Session")]);
+            dropdown.set_selected(selected as u32);
+            {
+                let sender = sender.clone();
+                dropdown.connect_selected_notify(move |dd| {
+                    sender.input(AppInput::SessionSelected(dd.selected()));
+                });
+            }
+            dropdown.upcast()
+        };
 
         let card = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
         card.add_css_class("login-card");
         card.append(&entry);
         card.append(&status_lbl);
-        card.append(&session_lbl);
+        card.append(&session_widget);
 
         let widgets = view_output!();
         widgets.root_box.append(&clock_lbl);
@@ -127,13 +154,15 @@ impl SimpleComponent for App {
             entry,
             stage: Stage::Username,
             username: String::new(),
-            session,
+            sessions,
+            selected,
             clock_format: config.appearance.clock.format.clone(),
             cmd_tx,
         };
         model
             .clock_lbl
             .set_label(&current_time(&model.clock_format));
+        model.entry.grab_focus();
 
         ComponentParts { model, widgets }
     }
@@ -160,6 +189,12 @@ impl SimpleComponent for App {
                 // greetd now owns the VT switch to the started session —
                 // nothing left for the greeter to do.
                 self.status_lbl.set_label("Starting session…");
+            }
+            AppInput::SessionSelected(idx) => {
+                let idx = idx as usize;
+                if idx < self.sessions.len() {
+                    self.selected = idx;
+                }
             }
         }
     }
@@ -225,7 +260,7 @@ impl App {
     }
 
     fn start_session(&mut self) {
-        let Some(session) = &self.session else {
+        let Some(session) = self.sessions.get(self.selected) else {
             self.status_lbl.set_label("No session available to start");
             self.status_lbl.add_css_class("error");
             return;

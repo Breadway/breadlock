@@ -15,7 +15,8 @@ pub struct Config {
 pub struct Sessions {
     pub wayland_dirs: Vec<String>,
     pub xsessions_dirs: Vec<String>,
-    /// `.desktop` file stem (without extension) to auto-select.
+    /// `.desktop` file stem (without extension) to pre-select in the picker.
+    /// Falls back to the first discovered session if this stem is missing.
     pub default: String,
 }
 
@@ -24,7 +25,7 @@ impl Default for Sessions {
         Self {
             wayland_dirs: vec!["/usr/share/wayland-sessions".to_string()],
             xsessions_dirs: vec!["/usr/share/xsessions".to_string()],
-            default: "hyprland".to_string(),
+            default: "bos".to_string(),
         }
     }
 }
@@ -58,6 +59,6 @@ mod tests {
         let s = Sessions::default();
         assert_eq!(s.wayland_dirs, vec!["/usr/share/wayland-sessions"]);
         assert_eq!(s.xsessions_dirs, vec!["/usr/share/xsessions"]);
-        assert_eq!(s.default, "hyprland");
+        assert_eq!(s.default, "bos");
     }
 }

@@ -43,7 +43,7 @@ breadlock/
 
 - **Protocol**: [`greetd_ipc`](https://crates.io/crates/greetd_ipc) (greetd's own crate) over the Unix socket at `$GREETD_SOCK`: `CreateSession` → answer each `AuthMessage` via `PostAuthMessageResponse` → `StartSession` hands the resolved session command to `greetd`, which execs it and owns the VT switch away.
 - **UI**: GTK4 + [relm4](https://relm4.org/), matching breadbar's stack — **without** `gtk4-layer-shell`. `greetd` hosts the greeter under a single-client kiosk compositor (`cage -s`), which already fullscreens its one client, so layer-shell's multi-surface/anchor semantics don't apply. Confirmed against ReGreet's real dependency list, which has no layer-shell dependency either.
-- **Sessions**: scans `/usr/share/wayland-sessions` and `/usr/share/xsessions` for `.desktop` entries and auto-selects the configured default (or the only one found). BOS ships one session today, so there's no picker UI in v1 — a natural v2 addition if that changes.
+- **Sessions**: scans `/usr/share/wayland-sessions` and `/usr/share/xsessions` for `.desktop` entries and shows a keyboard-accessible picker. The configured default (compiled-in: `bos`) is pre-selected when that stem exists; otherwise the first discovered session. `StartSession` is the chosen entry's `Exec=` argv.
 
 ## Config
 
