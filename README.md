@@ -9,6 +9,13 @@ Two binaries, one workspace:
 
 Both use [`bread-theme`](https://git.breadway.dev/Breadway/bread-ecosystem) for palette loading, matching the rest of the bread* ecosystem (breadbar, breadbox, bos-settings).
 
+## bread event integration
+
+`breadlock` works the same with or without `breadd`. When `breadd` is
+running, it publishes `bread.lock.locked` / `bread.lock.unlocked`. See
+[EVENTS.md](EVENTS.md) for the bus contract. `breadgreet` is not on the
+bus. There is no `bakery.toml` (PAM / pacman exception).
+
 ## Architecture
 
 ```

@@ -7,6 +7,10 @@ on:
 jobs:
   package:
     runs-on: [self-hosted, hestia]
+    # Forgejo's Arch package registry does not GPG-sign packages for pacman.
+    # BOS therefore uses SigLevel=Never on [Breadway.os.git.breadway.dev]
+    # until a signed repo exists. Keep publishing here — do not flip this
+    # job to a different registry just to get signatures.
     container:
       image: archlinux:latest
     steps:

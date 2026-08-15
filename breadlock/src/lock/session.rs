@@ -9,6 +9,7 @@ impl SessionLockHandler for AppState {
     fn locked(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, session_lock: SessionLock) {
         tracing::info!("session locked");
         self.session_lock = Some(session_lock);
+        crate::bread_events::emit_locked();
     }
 
     /// The compositor denied the lock request, or ended an active lock out

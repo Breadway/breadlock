@@ -1,5 +1,6 @@
 mod auth;
 mod background;
+mod bread_events;
 mod config;
 mod input;
 mod lock;
@@ -53,6 +54,7 @@ fn main() {
                 tracing::info!("authenticated, unlocking");
                 if let Some(lock) = state.session_lock.take() {
                     lock.unlock();
+                    bread_events::emit_unlocked();
                 }
                 state.exit = true;
             }
