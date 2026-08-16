@@ -1,4 +1,4 @@
-pub use bread_theme::{ink_on, load_palette, Palette};
+pub use bread_theme::{ink_on, load_palette, load_palette_for, Palette};
 
 /// Parse a `#rrggbb` hex colour. Falls back to opaque black on malformed input
 /// (palette slots are always produced by [`bread_theme`], which guarantees

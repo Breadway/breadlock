@@ -156,12 +156,13 @@ fn run_lock() {
     let auth_tx = auth::register(&loop_handle, move |state: &mut AppState, result| {
         match result {
             Ok(()) => {
-                tracing::info!("authenticated, unlocking");
-                if let Some(lock) = state.session_lock.take() {
-                    lock.unlock();
-                    bread_events::emit_unlocked();
+                // Keep the lock surfaces up and fade the overlay out.
+                // Compositor unlock() runs only after UNLOCK_MS — dying
+                // mid-fade is fail-secure (session stays locked).
+                tracing::info!("authenticated, fading out");
+                if state.unlocking.is_none() {
+                    state.unlocking = Some(std::time::Instant::now());
                 }
-                state.exit = true;
             }
             Err(err) => {
                 match err {
@@ -217,6 +218,9 @@ fn run_lock() {
         password: zeroize::Zeroizing::new(String::with_capacity(128)),
         auth_state: AuthState::Idle,
         auth_tx,
+        appear_started: None,
+        unlocking: None,
+        anim_timer_armed: false,
         exit: false,
     };
 
@@ -272,7 +276,13 @@ fn run_lock() {
     let mut consecutive_errors = 0u32;
     while !app_state.exit {
         match event_loop.dispatch(Duration::from_millis(250), &mut app_state) {
-            Ok(()) => consecutive_errors = 0,
+            Ok(()) => {
+                consecutive_errors = 0;
+                // Backup if the 16ms anim timer failed to register: the
+                // 250ms dispatch timeout (or the 1s clock tick) still
+                // completes a finished unlock fade.
+                app_state.complete_unlock_if_ready();
+            }
             Err(err) => {
                 consecutive_errors += 1;
                 tracing::error!(

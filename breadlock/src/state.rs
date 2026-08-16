@@ -8,7 +8,7 @@ use smithay_client_toolkit::registry_handlers;
 use smithay_client_toolkit::seat::SeatState;
 use smithay_client_toolkit::session_lock::{SessionLock, SessionLockState, SessionLockSurface};
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use wayland_client::protocol::{wl_keyboard, wl_output, wl_shm};
 use wayland_client::{Connection, QueueHandle};
 
@@ -75,6 +75,17 @@ pub struct AppState {
     pub auth_state: AuthState,
     pub auth_tx: Sender<AuthResult>,
 
+    /// First-frame timestamp for the lock-appear animation. `None` until
+    /// the first non-degenerate redraw so the fade starts when the surface
+    /// is actually visible, not when the process starts.
+    pub appear_started: Option<Instant>,
+    /// Set on PAM success. While `Some`, lock surfaces stay up and the
+    /// overlay fades out; compositor `unlock()` happens only after the
+    /// fade completes. Dying mid-fade leaves the session locked (fail-secure).
+    pub unlocking: Option<Instant>,
+    /// True while a ~16ms animation timer is registered on the event loop.
+    pub anim_timer_armed: bool,
+
     pub exit: bool,
 }
 
@@ -93,28 +104,45 @@ impl AppState {
             return;
         }
 
+        if self.appear_started.is_none() {
+            self.appear_started = Some(Instant::now());
+        }
+
         let clock_text = chrono::Local::now()
             .format(&self.config.appearance.clock.format)
             .to_string();
         let status_text = match self.auth_state {
             AuthState::Checking => Some("Checking…".to_string()),
             AuthState::Failed => Some("Wrong password".to_string()),
-            AuthState::ConfigError => {
-                Some("PAM config error — check logs (breadlock service not set up correctly)".to_string())
-            }
+            AuthState::ConfigError => Some(
+                "PAM config error — check logs (breadlock service not set up correctly)"
+                    .to_string(),
+            ),
             AuthState::Idle => None,
         };
 
+        let appear_t = self
+            .appear_started
+            .map(|t| render::unit_progress(t, render::APPEAR_MS))
+            .unwrap_or(0.0);
+        let unlock_t = self
+            .unlocking
+            .map(|t| render::unit_progress(t, render::UNLOCK_MS))
+            .unwrap_or(0.0);
+
+        let output_palette = self.palette_for_surface(surface);
         let inputs = render::FrameInputs {
             width,
             height,
             background: &self.background,
-            palette: &self.palette,
+            palette: &output_palette,
             font_family: &self.config.appearance.font.family,
             clock_text: &clock_text,
             password_len: self.password.len(),
             failed: matches!(self.auth_state, AuthState::Failed | AuthState::ConfigError),
             status_text: status_text.as_deref(),
+            appear_t,
+            unlock_t,
         };
 
         let Some(pixmap) = render::compose(&mut self.text_renderer, &inputs) else {
@@ -149,6 +177,18 @@ impl AppState {
             .damage_buffer(0, 0, width as i32, height as i32);
         surface.wl_surface().commit();
         buffer.destroy();
+
+        self.arm_anim_if_needed(qh);
+    }
+
+    fn palette_for_surface(&self, surface: &SessionLockSurface) -> breadlock_ui::theme::Palette {
+        self.surfaces
+            .iter()
+            .find(|s| s.surface.wl_surface() == surface.wl_surface())
+            .and_then(|s| self.output_state.info(&s.output))
+            .and_then(|info| info.name)
+            .map(|name| breadlock_ui::theme::load_palette_for(&name))
+            .unwrap_or_else(|| self.palette.clone())
     }
 
     /// Redraws every currently-configured surface — used for the clock tick
@@ -162,6 +202,73 @@ impl AppState {
         for (surface, width, height) in surfaces {
             self.redraw_surface(qh, &surface, width, height);
         }
+        self.complete_unlock_if_ready();
+    }
+
+    fn appear_in_progress(&self) -> bool {
+        self.appear_started
+            .map(|t| t.elapsed() < Duration::from_millis(render::APPEAR_MS))
+            .unwrap_or(true)
+    }
+
+    fn unlock_in_progress(&self) -> bool {
+        self.unlocking
+            .map(|t| t.elapsed() < Duration::from_millis(render::UNLOCK_MS))
+            .unwrap_or(false)
+    }
+
+    fn anim_in_progress(&self) -> bool {
+        self.unlocking.is_some() || self.appear_in_progress()
+    }
+
+    /// Keep requesting frames while appear or unlock-fade is running.
+    fn arm_anim_if_needed(&mut self, qh: &QueueHandle<Self>) {
+        if self.anim_timer_armed || !self.anim_in_progress() {
+            return;
+        }
+        self.anim_timer_armed = true;
+        let qh = qh.clone();
+        if self
+            .loop_handle
+            .insert_source(
+                Timer::from_duration(Duration::from_millis(render::ANIM_FRAME_MS)),
+                move |_, _, state| state.tick_animation(&qh),
+            )
+            .is_err()
+        {
+            tracing::error!("failed to arm lock animation timer");
+            self.anim_timer_armed = false;
+        }
+    }
+
+    fn tick_animation(&mut self, qh: &QueueHandle<Self>) -> TimeoutAction {
+        self.redraw_all(qh);
+        if self.unlocking.is_some() && !self.unlock_in_progress() {
+            self.anim_timer_armed = false;
+            TimeoutAction::Drop
+        } else if self.anim_in_progress() {
+            TimeoutAction::ToDuration(Duration::from_millis(render::ANIM_FRAME_MS))
+        } else {
+            self.anim_timer_armed = false;
+            TimeoutAction::Drop
+        }
+    }
+
+    /// After the unlock fade reaches t==1, send compositor `unlock` and
+    /// exit. Not called until then — dying mid-fade stays locked.
+    pub fn complete_unlock_if_ready(&mut self) {
+        let Some(started) = self.unlocking else {
+            return;
+        };
+        if started.elapsed() < Duration::from_millis(render::UNLOCK_MS) {
+            return;
+        }
+        if let Some(lock) = self.session_lock.take() {
+            tracing::info!("unlock fade complete");
+            lock.unlock();
+            crate::bread_events::emit_unlocked();
+        }
+        self.exit = true;
     }
 
     /// After a failed attempt, clears the "wrong password" state (and

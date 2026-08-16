@@ -9,7 +9,19 @@
 use crate::background::Background;
 use breadlock_ui::painter::{rounded_rect, tokens, TextRenderer};
 use breadlock_ui::theme::tiny_skia_color;
+use std::time::Instant;
 use tiny_skia::{Color, Paint, Pixmap};
+
+/// Lock-appear duration: overlay fades in and eases up from below rest.
+pub const APPEAR_MS: u64 = 450;
+/// Unlock-fade duration: overlay fades out with a slight upward drift.
+pub const UNLOCK_MS: u64 = 400;
+/// Redraw cadence while an animation is in flight (~60 Hz).
+pub const ANIM_FRAME_MS: u64 = 16;
+
+const APPEAR_SLIDE_PX: f32 = 28.0;
+const UNLOCK_DRIFT_PX: f32 = 20.0;
+const DIM_ALPHA: f32 = 0.28;
 
 pub struct FrameInputs<'a> {
     pub width: u32,
@@ -23,6 +35,40 @@ pub struct FrameInputs<'a> {
     /// shake in v1 — just a color/status-text indicator.
     pub failed: bool,
     pub status_text: Option<&'a str>,
+    /// Raw 0..1 lock-appear progress (pre-ease). 1 is rest pose.
+    pub appear_t: f32,
+    /// Raw 0..1 unlock-fade progress (pre-ease). 0 when not unlocking.
+    pub unlock_t: f32,
+}
+
+/// Ease-out cubic. `t` is clamped to 0..1.
+pub fn ease_out_cubic(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    let inv = 1.0 - t;
+    1.0 - inv * inv * inv
+}
+
+/// Linear 0..1 progress since `started` over `duration_ms`.
+pub fn unit_progress(started: Instant, duration_ms: u64) -> f32 {
+    let dur = duration_ms as f32 / 1000.0;
+    if dur <= 0.0 {
+        return 1.0;
+    }
+    (started.elapsed().as_secs_f32() / dur).clamp(0.0, 1.0)
+}
+
+/// Overlay alpha and y-offset (positive is down) from raw 0..1 progress.
+pub fn overlay_motion(appear_t: f32, unlock_t: f32) -> (f32, f32) {
+    let appear = ease_out_cubic(appear_t);
+    let unlock = ease_out_cubic(unlock_t);
+    let alpha = (appear * (1.0 - unlock)).clamp(0.0, 1.0);
+    let y = APPEAR_SLIDE_PX * (1.0 - appear) - UNLOCK_DRIFT_PX * unlock;
+    (alpha, y)
+}
+
+fn faded(mut color: Color, alpha: f32) -> Color {
+    color.apply_opacity(alpha);
+    color
 }
 
 /// Composes one frame. Returns `None` only if `width`/`height` are degenerate
@@ -31,11 +77,28 @@ pub fn compose(text: &mut TextRenderer, inputs: &FrameInputs) -> Option<Pixmap> 
     let mut pixmap = Pixmap::new(inputs.width, inputs.height)?;
     inputs.background.paint(&mut pixmap);
 
+    let (alpha, y_off) = overlay_motion(inputs.appear_t, inputs.unlock_t);
+    if alpha <= 0.0 {
+        return Some(pixmap);
+    }
+
     let (w, h) = (inputs.width as f32, inputs.height as f32);
-    let surface_color = tiny_skia_color(&inputs.palette.color0);
-    let accent_color = tiny_skia_color(&inputs.palette.color4);
-    let on_surface = tiny_skia_color(breadlock_ui::theme::ink_on(&inputs.palette.color0));
-    let red_color = tiny_skia_color(&inputs.palette.color1);
+    let surface_color = faded(tiny_skia_color(&inputs.palette.color0), alpha);
+    let accent_color = faded(tiny_skia_color(&inputs.palette.color4), alpha);
+    let on_surface = faded(
+        tiny_skia_color(breadlock_ui::theme::ink_on(&inputs.palette.color0)),
+        alpha,
+    );
+    let red_color = faded(tiny_skia_color(&inputs.palette.color1), alpha);
+
+    // Translucent veil over the (static) wallpaper — fades with the chrome.
+    if let Some(rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, w, h) {
+        let mut paint = Paint::default();
+        paint.set_color(
+            Color::from_rgba(0.0, 0.0, 0.0, DIM_ALPHA * alpha).unwrap_or(Color::TRANSPARENT),
+        );
+        pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
+    }
 
     // Clock, large, centered in the upper third.
     let clock_size = 64.0;
@@ -45,16 +108,16 @@ pub fn compose(text: &mut TextRenderer, inputs: &FrameInputs) -> Option<Pixmap> 
         inputs.clock_text,
         inputs.font_family,
         clock_size,
-        Color::WHITE,
+        faded(Color::WHITE, alpha),
         (w - clock_w) / 2.0,
-        h * 0.28,
+        h * 0.28 + y_off,
     );
 
     // Password pill, centered; turns red while showing a failed attempt.
     let pill_w = 280.0_f32.min(w - tokens::SPACE_XL as f32 * 2.0);
     let pill_h = 48.0;
     let pill_x = (w - pill_w) / 2.0;
-    let pill_y = h * 0.5;
+    let pill_y = h * 0.5 + y_off;
 
     if let Some(path) = rounded_rect(
         pill_x,
@@ -97,7 +160,7 @@ pub fn compose(text: &mut TextRenderer, inputs: &FrameInputs) -> Option<Pixmap> 
             {
                 let mut paint = Paint::default();
                 paint.set_color(if inputs.failed {
-                    Color::WHITE
+                    faded(Color::WHITE, alpha)
                 } else {
                     accent_color
                 });
@@ -172,8 +235,38 @@ mod tests {
             password_len: 0,
             failed: false,
             status_text: None,
+            appear_t: 1.0,
+            unlock_t: 0.0,
         };
         let pixmap = compose(&mut text, &inputs).unwrap();
         assert_eq!((pixmap.width(), pixmap.height()), (400, 300));
+    }
+
+    #[test]
+    fn ease_out_cubic_bounds_and_shape() {
+        assert_eq!(ease_out_cubic(0.0), 0.0);
+        assert_eq!(ease_out_cubic(1.0), 1.0);
+        assert_eq!(ease_out_cubic(-1.0), 0.0);
+        assert_eq!(ease_out_cubic(2.0), 1.0);
+        // Ease-out sits above the linear diagonal in the middle of the curve.
+        assert!(ease_out_cubic(0.5) > 0.5);
+    }
+
+    #[test]
+    fn overlay_motion_appear_starts_below_and_fades_in() {
+        let (a0, y0) = overlay_motion(0.0, 0.0);
+        assert_eq!(a0, 0.0);
+        assert!(y0 > 0.0, "clock/pill should start below rest, got y={y0}");
+
+        let (a1, y1) = overlay_motion(1.0, 0.0);
+        assert_eq!(a1, 1.0);
+        assert_eq!(y1, 0.0);
+    }
+
+    #[test]
+    fn overlay_motion_unlock_fades_out_and_drifts_up() {
+        let (a, y) = overlay_motion(1.0, 1.0);
+        assert_eq!(a, 0.0);
+        assert!(y < 0.0, "unlock should drift up from rest, got y={y}");
     }
 }
