@@ -2,7 +2,7 @@
 
 Session locker and graphical [greetd](https://git.sr.ht/~kennylevinsen/greetd) greeter for [Hyprland](https://hyprland.org/) on Wayland — the bread-ecosystem replacement for `hyprlock` and `tuigreet`. BOS already ships both binaries: `breadgreet` under `cage` via greetd, and `breadlock` via hypridle (`SUPER+L` is `loginctl lock-session`).
 
-Two binaries, one workspace:
+Two binaries, one workspace: 
 
 - **`breadlock`** — locks the *already running* Hyprland session via `ext-session-lock-v1`. Drop-in for `hyprlock`.
 - **`breadgreet`** — a graphical greeter that speaks `greetd`'s own IPC protocol (the same architecture as `gtkgreet`/`regreet`). `greetd` keeps owning PAM auth, VT switching, and session launching; `breadgreet` only draws the login UI and relays the conversation. This is a deliberate choice over reimplementing a display manager from scratch — `greetd` is already installed and battle-tested.
