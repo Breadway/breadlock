@@ -140,8 +140,9 @@ impl KeyboardHandler for AppState {
 impl AppState {
     fn handle_key(&mut self, qh: &QueueHandle<Self>, event: KeyEvent) {
         // Ignore all input while a PAM check is in flight so a fast second
-        // Enter can't race the first attempt.
-        if self.auth_state == AuthState::Checking {
+        // Enter can't race the first attempt, and while the unlock fade is
+        // playing (auth already succeeded; surfaces stay up until it ends).
+        if self.auth_state == AuthState::Checking || self.unlocking.is_some() {
             return;
         }
 

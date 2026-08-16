@@ -146,6 +146,7 @@ impl SimpleComponent for App {
         spawn_greetd_actor(cmd_rx, sender.clone());
 
         theme::apply();
+        bread_theme::gtk::bind_window_auto(&root);
         spawn_clock_ticker(sender.clone());
 
         let model = App {
