@@ -68,7 +68,11 @@ uniform float u_veil_alpha;
 uniform float u_screen_h;
 void main() {
     vec4 c = texture2D(u_tex, v_uv) * u_color;
-    float row = 1.0 - gl_FragCoord.y / u_screen_h;   // 1 at top
+    // Same gradient as the software dim_rows: top = u_dim_top, bottom =
+    // u_dim_bottom, interpolated by screen-space y. gl_FragCoord has y=0 at
+    // the BOTTOM of the framebuffer, so `row = 1.0 - y/h` is 1 at the bottom
+    // and 0 at the top; mixing with `row` yields top = u_dim_top.
+    float row = 1.0 - gl_FragCoord.y / u_screen_h;   // 1 at bottom, 0 at top
     float dim = mix(u_dim_top, u_dim_bottom, row) * u_veil_alpha;
     gl_FragColor = vec4(c.rgb * (1.0 - dim), 1.0);
 }";
@@ -533,24 +537,30 @@ impl GpuRenderer {
             self.chrome_tex_size = (w, h);
         }
 
+        let rw = (x1 - x0) as usize;
+        let rh = (y1 - y0) as usize;
         let data = pixmap.data();
-        let stride = w as usize * 4;
-        let offset = y0 as usize * stride + x0 as usize * 4;
-        let rw = (x1 - x0) as i32;
-        let rh = (y1 - y0) as i32;
         let gl = &self.gl;
         unsafe {
             gl.bind_texture(glow::TEXTURE_2D, Some(self.chrome_tex));
+            // glTexSubImage2D reads `rw` pixels contiguously per row with no
+            // knowledge of the source's row stride. We're on GLES2 (where
+            // GL_UNPACK_ROW_LENGTH doesn't exist), so pack the sub-rect rows
+            // into a tightly-strided buffer first — otherwise every row after
+            // the first is shifted by (w - rw) pixels and the chrome texture
+            // comes out horizontally scrambled (the clock/pill/status rect is
+            // narrower than the surface, so this always triggered).
+            let packed = pack_rows(data, w as usize, x0 as usize, y0 as usize, rw, rh);
             gl.tex_sub_image_2d(
                 glow::TEXTURE_2D,
                 0,
-                x0,
-                y0,
-                rw,
-                rh,
+                x0 as i32,
+                y0 as i32,
+                rw as i32,
+                rh as i32,
                 glow::RGBA,
                 glow::UNSIGNED_BYTE,
-                glow::PixelUnpackData::Slice(Some(&data[offset..])),
+                glow::PixelUnpackData::Slice(Some(&packed)),
             );
             gl.use_program(Some(self.chrome_program));
             gl.bind_vertex_array(Some(self.quad_vao));
@@ -605,6 +615,18 @@ fn pan_region(wp: (u32, u32), target: (u32, u32), ken_burns: bool, t_secs: f32) 
         (0.0, 0.0)
     };
     (-tx, -ty, scaled_w, scaled_h)
+}
+
+/// Packs the `(x0, y0, rw, rh)` sub-rect of a `w`-wide RGBA row-major buffer
+/// into a tightly-strided `rw`-per-row buffer for `glTexSubImage2D`, which
+/// reads rows contiguously and has no stride concept on GLES2.
+fn pack_rows(data: &[u8], w: usize, x0: usize, y0: usize, rw: usize, rh: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(rw * rh * 4);
+    for row in 0..rh {
+        let src = (y0 + row) * w * 4 + x0 * 4;
+        out.extend_from_slice(&data[src..src + rw * 4]);
+    }
+    out
 }
 
 fn compile_program(gl: &glow::Context, vs_src: &str, fs_src: &str) -> Option<glow::Program> {
@@ -782,6 +804,42 @@ mod tests {
         }
     }
 
+    /// The GPU background shader's veil math, replicated in Rust: on GLES,
+    /// `gl_FragCoord.y` is 0 at the BOTTOM of the framebuffer, so
+    /// `row = 1.0 - y/h` is 1 at the bottom and 0 at the top, and
+    /// `dim = mix(u_dim_top, u_dim_bottom, row)` dims the TOP by u_dim_top.
+    /// This must match the software `dim_rows` (which indexes y=0 at the
+    /// top) exactly, or the GPU veil renders upside-down.
+    fn shader_dim_at(frag_y: f32, h: f32) -> f32 {
+        let row = 1.0 - frag_y / h; // 1 at bottom (frag_y=0), 0 at top
+        crate::render::DIM_ALPHA_TOP + (crate::render::DIM_ALPHA_BOTTOM - crate::render::DIM_ALPHA_TOP) * row
+    }
+
+    #[test]
+    fn veil_gradient_matches_software_dim_rows() {
+        use crate::render::DIM_ALPHA_BOTTOM;
+        use crate::render::DIM_ALPHA_TOP;
+        let h = 720.0;
+        // Software dim_rows: alpha = lerp(TOP, BOTTOM, y/h) with y=0 at top,
+        // so the top of the screen gets the DEEPER dim (DIM_ALPHA_TOP).
+        assert!(DIM_ALPHA_TOP > DIM_ALPHA_BOTTOM);
+        // Shader at the very top (gl_FragCoord.y = h): row = 0 -> dim = TOP.
+        assert!((shader_dim_at(h, h) - DIM_ALPHA_TOP).abs() < 1e-6);
+        // Shader at the very bottom (gl_FragCoord.y = 0): row = 1 -> dim = BOTTOM.
+        assert!((shader_dim_at(0.0, h) - DIM_ALPHA_BOTTOM).abs() < 1e-6);
+        // Match the software formula at many interior rows.
+        for y in 0..=720 {
+            let yf = y as f32;
+            let software = DIM_ALPHA_TOP + (DIM_ALPHA_BOTTOM - DIM_ALPHA_TOP) * (yf / h);
+            // Same physical row: pixmap row y (top-anchored) == frag y = h - y.
+            let shader = shader_dim_at(h - yf, h);
+            assert!(
+                (shader - software).abs() < 1e-5,
+                "veil mismatch at row {y}: shader {shader} vs software {software}"
+            );
+        }
+    }
+
     #[test]
     fn egl_attribs_are_none_terminated_pairs() {
         assert_eq!(EGL_ATTRIBS.len() % 2, 1, "attribs must be key/value pairs + NONE");
@@ -792,5 +850,30 @@ mod tests {
     fn f32s_as_bytes_has_exact_length() {
         let v: [f32; 12] = [0.0; 12];
         assert_eq!(f32s_as_bytes(&v).len(), 12 * 4);
+    }
+
+    #[test]
+    fn pack_rows_keeps_row_ordering_and_stride() {
+        // A 4x2 RGBA buffer where pixel (x, y) has value (x, y, 0, 255).
+        let mut data = vec![0u8; 4 * 2 * 4];
+        for y in 0..2 {
+            for x in 0..4 {
+                let i = (y * 4 + x) * 4;
+                data[i] = x as u8;
+                data[i + 1] = y as u8;
+                data[i + 2] = 0;
+                data[i + 3] = 255;
+            }
+        }
+        // Take the 2x1 rect at (1, 0).
+        let packed = pack_rows(&data, 4, 1, 0, 2, 1);
+        assert_eq!(packed.len(), 2 * 1 * 4);
+        assert_eq!(packed[0], 1);
+        assert_eq!(packed[4], 2);
+        // Two rows: the second row must NOT be shifted by (w - rw) — the bug.
+        let packed2 = pack_rows(&data, 4, 1, 0, 2, 2);
+        assert_eq!(packed2[8], 1, "row 2 col 0 must be x=1, not shifted");
+        assert_eq!(packed2[12], 2, "row 2 col 1 must be x=2, not shifted");
+        assert_eq!(packed2[9], 1, "row 2 must carry y=1");
     }
 }
