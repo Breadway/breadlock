@@ -134,6 +134,19 @@ pub struct FrameInputs<'a> {
     /// Minute-rollover crossfade: `(previous clock text, raw 0..1 progress)`.
     pub clock_old: Option<(&'a str, f32)>,
     pub password_len: usize,
+    /// The actual password text — only read when `reveal` is true (hold-to-
+    /// reveal renders the plain characters instead of dots).
+    pub password: &'a str,
+    /// True while the reveal key (Tab) is held — dots render as the plain
+    /// characters.
+    pub reveal: bool,
+    /// Caps Lock state — shows the caps chip when on.
+    pub caps_lock: bool,
+    /// Active keyboard layout index — shown next to the caps chip when non-0.
+    pub layout_index: u32,
+    /// Idle auto-dim progress 0..1 (0 = disabled/not idle) — deepens the dim
+    /// veil after `animation.idle_dim_after_secs` of no keystrokes.
+    pub idle_dim: f32,
     /// True while showing a failed attempt (red pill + shake + red status).
     pub failed: bool,
     /// Raw 0..1 progress of the wrong-password shake. 0 when not failed.
@@ -222,6 +235,26 @@ pub fn overlay_motion(appear_t: f32, unlock_t: f32) -> (f32, f32) {
     (alpha, y)
 }
 
+/// How much extra dim the idle auto-dim adds on top of the base veil at full
+/// progress (`idle_dim = 1`). Both the software `dim_rows` and the GPU
+/// background shader scale by this so the two paths stay identical.
+pub(crate) const IDLE_DIM_MAX: f32 = 0.25;
+/// How long the idle auto-dim takes to ramp from 0 to full, in milliseconds.
+pub(crate) const IDLE_DIM_RAMP_MS: u64 = 8000;
+
+/// Background dim alpha with the idle auto-dim folded in. The base veil is
+/// at most 1.0 once the appear finishes, so the idle deepens *beyond* that
+/// (up to `IDLE_DIM_MAX` extra) — it can legally exceed 1.0 because it only
+/// scales the background dim, never a color alpha. Shared by the software
+/// `dim_rows` and the GPU background shader (`u_veil_alpha`) so an
+/// idle-dimmed screen looks identical on both renderers. Rides the same
+/// appear/unlock envelope as the base veil so there's no residual darkening
+/// as the lock releases.
+pub fn veil_alpha(appear_t: f32, unlock_t: f32, idle_dim: f32) -> f32 {
+    let (base, _) = overlay_motion(appear_t, unlock_t);
+    base + IDLE_DIM_MAX * idle_dim * base
+}
+
 fn faded(mut color: Color, alpha: f32) -> Color {
     color.apply_opacity(alpha);
     color
@@ -298,32 +331,36 @@ fn compose_impl(
     }
 
     // Overall chrome fade: appear eased in, unlock eased out. The unlock
-    // `fade` multiplies every element below.
+    // `fade` multiplies every element below. The dim veil deepens further
+    // once the idle auto-dim kicks in — chrome alpha stays at the base veil
+    // (0..1) while only the background dim scales past it.
     let unlock = ease_out_cubic(inputs.unlock_t);
     let fade = 1.0 - unlock;
-    let (veil_alpha, _) = overlay_motion(inputs.appear_t, inputs.unlock_t);
-    if veil_alpha <= 0.0 {
+    let (base_veil, _) = overlay_motion(inputs.appear_t, inputs.unlock_t);
+    let bg_veil = veil_alpha(inputs.appear_t, inputs.unlock_t, inputs.idle_dim);
+    if base_veil <= 0.0 {
         return;
     }
 
     let (w, h) = (inputs.width as f32, inputs.height as f32);
-    let surface_color = faded(tiny_skia_color(&inputs.palette.color0), veil_alpha);
-    let accent_color = faded(tiny_skia_color(&inputs.palette.color4), veil_alpha);
-    let green_color = faded(tiny_skia_color(&inputs.palette.color2), veil_alpha);
+    let surface_color = faded(tiny_skia_color(&inputs.palette.color0), base_veil);
+    let accent_color = faded(tiny_skia_color(&inputs.palette.color4), base_veil);
+    let green_color = faded(tiny_skia_color(&inputs.palette.color2), base_veil);
     let on_surface = faded(
         tiny_skia_color(breadlock_ui::theme::ink_on(&inputs.palette.color0)),
-        veil_alpha,
+        base_veil,
     );
-    let red_color = faded(tiny_skia_color(&inputs.palette.color1), veil_alpha);
+    let red_color = faded(tiny_skia_color(&inputs.palette.color1), base_veil);
 
     // Translucent veil over the (static) wallpaper — a vertical gradient
     // (deeper at the top) that fades with the whole chrome. Applied in place
     // as a per-pixel multiply (premultiplied pixels scale by `1 - a` for a
     // black overlay), which is far cheaper than a full-surface gradient
     // fill/blit every frame. Skipped in the chrome-only path (the GPU shader
-    // applies the same veil to the background).
-    if rects.is_none() && veil_alpha > 0.0 {
-        dim_rows(pixmap, veil_alpha);
+    // applies the same veil to the background). `bg_veil` may exceed 1.0
+    // (idle auto-dim), which is fine — it only scales a multiply.
+    if rects.is_none() && base_veil > 0.0 {
+        dim_rows(pixmap, bg_veil);
     }
 
     // Per-element staggered entrance.
@@ -540,15 +577,101 @@ fn compose_impl(
         }
     }
 
+    // ---- Caps Lock / layout chip: a small centered pill above the password
+    // pill, only when Caps Lock is on or a non-default layout is active. A
+    // tiny floating hint so the user can't be confused by all-caps input.
+    if inputs.caps_lock || inputs.layout_index > 0 {
+        let mut label = String::new();
+        if inputs.caps_lock {
+            label.push_str("Caps Lock");
+        }
+        if inputs.layout_index > 0 {
+            if !label.is_empty() {
+                label.push_str(" · ");
+            }
+            label.push_str(&format!("Layout {}", inputs.layout_index + 1));
+        }
+        let chip_size = tokens::FONT_SIZE_SECONDARY as f32;
+        let chip_w = text.measure_line(&label, inputs.font_family, chip_size) + tokens::SPACE_MD as f32 * 2.0;
+        let chip_h = chip_size * 1.9;
+        let chip_x = (w - chip_w) / 2.0;
+        // Clear of the pill: chip bottom sits a full SPACE_LG above the pill
+        // top, so the two never touch even with the pill's glow/shadow.
+        let chip_y = pill_y - chip_h - tokens::SPACE_LG as f32;
+        let chip_alpha = pill_e * fade;
+        if let Some(r) = rects.as_deref_mut() {
+            r.expand(chip_x, chip_y, chip_x + chip_w, chip_y + chip_h);
+        }
+        if let Some(path) = rounded_rect(chip_x, chip_y, chip_w, chip_h, chip_h / 2.0) {
+            let mut paint = Paint::default();
+            // Slightly lifted surface color so it reads as a separate chip.
+            paint.set_color(faded(surface_color, chip_alpha));
+            paint.anti_alias = true;
+            pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+            let mut stroke = tiny_skia::Stroke::default();
+            stroke.width = 1.0;
+            let mut paint = Paint::default();
+            paint.set_color(faded(Color::WHITE, PILL_BORDER_ALPHA * chip_alpha));
+            pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+        }
+        let (chip_top, chip_height) = text.measure_box(&label, inputs.font_family, chip_size);
+        let label_y = chip_y + (chip_h - chip_height) / 2.0 - chip_top;
+        let label_w = text.measure_line(&label, inputs.font_family, chip_size);
+        text.draw_line(
+            &mut pixmap,
+            &label,
+            inputs.font_family,
+            chip_size,
+            faded(on_surface, chip_alpha),
+            (w - label_w) / 2.0,
+            label_y,
+        );
+    }
+
     // ---- Password dots — one filled circle per typed character, capped so a
     // very long password can't overflow the pill. The newest dot pops in with
-    // an overshoot; the rest sit at rest size.
+    // an overshoot; the rest sit at rest size. While the reveal key (Tab) is
+    // held, the plain characters are drawn instead.
     let max_dots = ((pill_w - tokens::SPACE_LG as f32 * 2.0) / DOT_GAP)
         .floor()
         .max(1.0) as usize;
     let shown_dots = inputs.password_len.min(max_dots);
     let dot_y = pill_y + pill_h / 2.0;
-    if shown_dots > 0 {
+    if inputs.reveal && shown_dots > 0 {
+        // Hold-to-reveal: render the actual password, centered, capped to
+        // the pill width (truncate with a trailing ellipsis on overflow).
+        // Measured into locals first — `text` is borrowed mutably by
+        // `draw_line`, so all `measure_*` calls must happen up front.
+        let reveal_size = tokens::FONT_SIZE_BASE as f32;
+        let reveal_rendered = reveal_fit(
+            text,
+            inputs.password,
+            inputs.font_family,
+            reveal_size,
+            pill_w - tokens::SPACE_LG as f32 * 2.0,
+        );
+        let (reveal_top, reveal_height) =
+            text.measure_box(&reveal_rendered, inputs.font_family, reveal_size);
+        let reveal_y = pill_y + (pill_h - reveal_height) / 2.0 - reveal_top;
+        let reveal_w = text.measure_line(&reveal_rendered, inputs.font_family, reveal_size);
+        if let Some(r) = rects.as_deref_mut() {
+            r.expand(
+                pill_x + tokens::SPACE_LG as f32,
+                pill_y,
+                pill_x + pill_w - tokens::SPACE_LG as f32,
+                pill_y + pill_h,
+            );
+        }
+        text.draw_line(
+            &mut pixmap,
+            &reveal_rendered,
+            inputs.font_family,
+            reveal_size,
+            faded(on_surface, pill_alpha),
+            (w - reveal_w) / 2.0,
+            reveal_y,
+        );
+    } else if shown_dots > 0 {
         let start_x = start_x_for(shown_dots, pill_x, pill_w);
         for i in 0..shown_dots {
             let newest = i == shown_dots - 1;
@@ -678,6 +801,34 @@ fn start_x_for(shown_dots: usize, pill_x: f32, pill_w: f32) -> f32 {
     pill_x + (pill_w - dots_w) / 2.0
 }
 
+/// Truncates a password for the hold-to-reveal view so it fits inside the
+/// pill, appending an ellipsis when trimmed. Returns the owned string to
+/// render (kept out of `compose` so the borrow of `text` ends before the
+/// draw call).
+fn reveal_fit(
+    text: &mut TextRenderer,
+    password: &str,
+    font_family: &str,
+    size: f32,
+    max_w: f32,
+) -> String {
+    let mut shown = password;
+    let mut ellipsis = "";
+    loop {
+        let candidate = format!("{shown}{ellipsis}");
+        if text.measure_line(&candidate, font_family, size) <= max_w || shown.is_empty() {
+            return candidate;
+        }
+        // Trim one char at a time until it fits.
+        shown = &shown[..shown
+            .char_indices()
+            .nth_back(1)
+            .map(|(i, _)| i)
+            .unwrap_or(0)];
+        ellipsis = "…";
+    }
+}
+
 /// Copies a composed frame into a `wl_shm` `Argb8888` buffer, swizzling
 /// tiny-skia's RGBA byte order to the host-endian `0xAARRGGBB` `wl_shm`
 /// expects (BGRA bytes on little-endian, which is every target this ships
@@ -744,6 +895,11 @@ mod tests {
             date_text: date,
             clock_old: None,
             password_len,
+            password: "",
+            reveal: false,
+            caps_lock: false,
+            layout_index: 0,
+            idle_dim: 0.0,
             failed,
             failed_t,
             dot_pop_t,
@@ -782,6 +938,11 @@ mod tests {
             date_text: "Friday · Aug 21",
             clock_old: None,
             password_len: 0,
+            password: "",
+            reveal: false,
+            caps_lock: false,
+            layout_index: 0,
+            idle_dim: 0.0,
             failed: false,
             failed_t: 0.0,
             dot_pop_t: 1.0,
@@ -812,6 +973,59 @@ mod tests {
         // Fully faded unlock returns just the background.
         let done = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 1.0, 1.0);
         assert!(compose(&mut text, &done).is_some());
+    }
+
+    #[test]
+    fn veil_alpha_idle_dim_deepens_past_base() {
+        // Rest pose, no idle: base appear alpha only (1.0).
+        assert_eq!(veil_alpha(1.0, 0.0, 0.0), 1.0);
+        // Mid-appear, no idle: base alpha.
+        let base = veil_alpha(0.5, 0.0, 0.0);
+        assert!(base > 0.0 && base < 1.0);
+        // Full idle dim deepens *past* the base (background-only alpha, so
+        // exceeding 1.0 is legal — it scales the dim multiply, not a color).
+        let idle = veil_alpha(0.5, 0.0, 1.0);
+        assert!(idle > base, "idle dim should deepen the veil");
+        // At rest with full idle: 1.0 + 0.25 * 1.0.
+        assert!((veil_alpha(1.0, 0.0, 1.0) - 1.25).abs() < 1e-6);
+        // Idle dim alone can't darken a screen that hasn't appeared yet
+        // (base 0 keeps the whole term 0).
+        assert_eq!(veil_alpha(0.0, 0.0, 1.0), 0.0);
+        // During unlock, idle dim can't push past the fade-out.
+        assert_eq!(veil_alpha(1.0, 1.0, 1.0), 0.0);
+    }
+
+    #[test]
+    fn reveal_fit_truncates_long_passwords() {
+        let mut text = TextRenderer::new();
+        // Short password fits unchanged.
+        assert_eq!(reveal_fit(&mut text, "hunter2", "sans-serif", 14.0, 200.0), "hunter2");
+        // A very long one is trimmed and ends with an ellipsis.
+        let long = "a".repeat(200);
+        let fitted = reveal_fit(&mut text, &long, "sans-serif", 14.0, 60.0);
+        assert!(fitted.ends_with('…'), "trimmed reveal should end with an ellipsis");
+        assert!(fitted.len() < long.len());
+        // And it actually fits the budget.
+        assert!(text.measure_line(&fitted, "sans-serif", 14.0) <= 60.0);
+    }
+
+    #[test]
+    fn compose_renders_caps_chip_and_reveal() {
+        let bg = Background::Color(Color::BLACK);
+        let palette = breadlock_ui::theme::Palette::default();
+        let mut text = TextRenderer::new();
+        let mut base = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 1.0, 0.0);
+        base.caps_lock = true;
+        base.password = "hunter2";
+        // Caps chip visible, no reveal: dots path.
+        assert!(compose(&mut text, &base).is_some());
+        // Reveal: plain characters instead of dots.
+        base.reveal = true;
+        assert!(compose(&mut text, &base).is_some());
+        // Non-default layout shows the layout chip too.
+        base.caps_lock = false;
+        base.layout_index = 1;
+        assert!(compose(&mut text, &base).is_some());
     }
 
     #[test]

@@ -26,7 +26,14 @@ family = "Varela Round"
 # How long the "wrong password" state (red pill) shows before input
 # re-enables, in milliseconds.
 fail_timeout_ms = 800
+# Hold Tab to reveal the typed password as plain characters (instead of
+# dots) while held. Tab can never be part of a password, so it's always
+# safe as a reveal gesture.
+reveal_hold = true
 
 [animation]
 # Subtle glow pulse on the password pill every few seconds while idle.
 breathe = true
+# Deepen the dim veil after this many seconds of no keystrokes (0 = off).
+# A gentle extra darkening for OLED/burn-in or late-night comfort.
+idle_dim_after_secs = 0

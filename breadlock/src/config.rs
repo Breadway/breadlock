@@ -16,12 +16,17 @@ pub struct Config {
 pub struct Input {
     /// How long the "wrong password" shake shows before input re-enables.
     pub fail_timeout_ms: u64,
+    /// Hold `Tab` to reveal the typed password as plain characters instead
+    /// of dots. Tab can never be part of a password (it produces no utf8),
+    /// so holding it is always safe to use as a reveal gesture.
+    pub reveal_hold: bool,
 }
 
 impl Default for Input {
     fn default() -> Self {
         Self {
             fail_timeout_ms: 800,
+            reveal_hold: true,
         }
     }
 }
@@ -35,11 +40,18 @@ pub struct Animation {
     /// screen is live, not frozen. Runs only during a short active window of
     /// each cycle (see `BREATHE_*` in render.rs).
     pub breathe: bool,
+    /// Deepen the dim veil after this many seconds of no keystrokes (0 =
+    /// off). A gentle extra darkening for OLED/burn-in and late-night
+    /// comfort; ramps in over a few seconds once the idle threshold hits.
+    pub idle_dim_after_secs: u64,
 }
 
 impl Default for Animation {
     fn default() -> Self {
-        Self { breathe: true }
+        Self {
+            breathe: true,
+            idle_dim_after_secs: 0,
+        }
     }
 }
 

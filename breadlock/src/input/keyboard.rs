@@ -118,23 +118,38 @@ impl KeyboardHandler for AppState {
     fn release_key(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _keyboard: &wl_keyboard::WlKeyboard,
         _serial: u32,
-        _event: KeyEvent,
+        event: KeyEvent,
     ) {
+        // Letting go of the reveal key (Tab) drops the plain-text view back
+        // to dots. Any other release doesn't change state.
+        if event.keysym == Keysym::Tab && self.reveal_held {
+            self.reveal_held = false;
+            self.redraw_all(qh);
+        }
     }
 
     fn update_modifiers(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _keyboard: &wl_keyboard::WlKeyboard,
         _serial: u32,
-        _modifiers: Modifiers,
+        modifiers: Modifiers,
         _raw_modifiers: RawModifiers,
-        _layout: u32,
+        layout: u32,
     ) {
+        let changed = self.caps_lock != modifiers.caps_lock || self.layout_index != layout;
+        self.caps_lock = modifiers.caps_lock;
+        self.layout_index = layout;
+        // A modifier update is still "activity" — it follows a key press, so
+        // don't let the idle auto-dim start counting while typing.
+        self.last_activity = Instant::now();
+        if changed {
+            self.redraw_all(qh);
+        }
     }
 }
 
@@ -144,6 +159,19 @@ impl AppState {
         // Enter can't race the first attempt, and while the unlock fade is
         // playing (auth already succeeded; surfaces stay up until it ends).
         if self.auth_state == AuthState::Checking || self.unlocking.is_some() {
+            return;
+        }
+
+        // Any key counts as activity — it resets the idle auto-dim ramp even
+        // when it doesn't change the password (e.g. pressing Enter on an
+        // empty field).
+        self.last_activity = Instant::now();
+
+        // Hold-to-reveal (Tab): show the plain characters while held. Tab
+        // itself produces no utf8, so it can't corrupt the password.
+        if event.keysym == Keysym::Tab && self.config.input.reveal_hold {
+            self.reveal_held = true;
+            self.redraw_all(qh);
             return;
         }
 

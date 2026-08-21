@@ -417,7 +417,7 @@ impl GpuRenderer {
 
     fn draw_background(&mut self, w: u32, h: u32, inputs: &FrameInputs) {
         let gl = &self.gl;
-        let (veil_alpha, _) = render::overlay_motion(inputs.appear_t, inputs.unlock_t);
+        let veil_alpha = render::veil_alpha(inputs.appear_t, inputs.unlock_t, inputs.idle_dim);
         unsafe {
             gl.use_program(Some(self.bg_program));
             gl.bind_vertex_array(Some(self.quad_vao));

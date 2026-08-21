@@ -119,6 +119,23 @@ pub struct AppState {
     /// True while a ~16ms animation timer is registered on the event loop.
     pub anim_timer_armed: bool,
 
+    /// Caps Lock is on (from the last keyboard modifier update) — drives the
+    /// small "Caps Lock" chip so the user isn't mystified by uppercase-only
+    /// input. Stale until the first modifier update arrives.
+    pub caps_lock: bool,
+    /// Active keyboard layout index (0-based) — shown next to the caps chip
+    /// when a non-default layout is selected.
+    pub layout_index: u32,
+    /// True while the user holds the reveal key (Tab) — dots render as the
+    /// plain characters while held.
+    pub reveal_held: bool,
+    /// Last keystroke/activity timestamp — drives the idle auto-dim ramp
+    /// (`animation.idle_dim_after_secs`). Any key press resets it.
+    pub last_activity: Instant,
+    /// Consecutive failed password attempts this session — drives the
+    /// "N failed attempts" status line. Reset on a successful auth.
+    pub failed_attempts: u32,
+
     pub exit: bool,
 }
 
@@ -172,12 +189,35 @@ impl AppState {
         // While a PAM check runs, the status dots tick to signal progress.
         let status_text = match self.auth_state {
             AuthState::Checking => Some(format!("Checking{}", checking_dots(now))),
-            AuthState::Failed => Some("Wrong password".to_string()),
+            AuthState::Failed => {
+                // Repeat failures get a counter so the user can tell the
+                // locker apart from a stuck/corrupt one ("Wrong password"
+                // alone reads identically every time).
+                let n = self.failed_attempts.max(1);
+                Some(if n > 1 {
+                    format!("Wrong password — {n} failed attempts")
+                } else {
+                    "Wrong password".to_string()
+                })
+            }
             AuthState::ConfigError => Some(
                 "PAM config error — check logs (breadlock service not set up correctly)"
                     .to_string(),
             ),
             AuthState::Idle => None,
+        };
+        // Idle auto-dim: ramp 0..1 over IDLE_DIM_RAMP_MS once the configured
+        // idle threshold elapses with no keystrokes. 0 when disabled.
+        let idle_dim = if self.config.animation.idle_dim_after_secs > 0 {
+            let idle_s = self.last_activity.elapsed().as_secs_f64()
+                - self.config.animation.idle_dim_after_secs as f64;
+            if idle_s <= 0.0 {
+                0.0
+            } else {
+                (idle_s / (render::IDLE_DIM_RAMP_MS as f64 / 1000.0)).min(1.0) as f32
+            }
+        } else {
+            0.0
         };
         let status_t = self
             .status_anim_started
@@ -224,6 +264,11 @@ impl AppState {
             date_text: &date_text,
             clock_old: clock_old.as_ref().map(|(s, t)| (s.as_str(), *t)),
             password_len: self.password.len(),
+            password: &self.password,
+            reveal: self.reveal_held,
+            caps_lock: self.caps_lock,
+            layout_index: self.layout_index,
+            idle_dim,
             failed: matches!(self.auth_state, AuthState::Failed | AuthState::ConfigError),
             failed_t,
             dot_pop_t,

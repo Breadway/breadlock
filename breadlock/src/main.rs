@@ -170,6 +170,7 @@ fn run_lock() {
                 // Compositor unlock() runs only after UNLOCK_MS — dying
                 // mid-fade is fail-secure (session stays locked).
                 tracing::info!("authenticated, fading out");
+                state.failed_attempts = 0;
                 if state.unlocking.is_none() {
                     state.unlocking = Some(std::time::Instant::now());
                 }
@@ -191,6 +192,7 @@ fn run_lock() {
                     }
                     auth::AuthError::Authenticate | auth::AuthError::AccountInvalid => {
                         tracing::warn!(%err, "authentication failed");
+                        state.failed_attempts = state.failed_attempts.saturating_add(1);
                         state.auth_state = AuthState::Failed;
                         state.failed_at = Some(std::time::Instant::now());
                     }
@@ -246,6 +248,11 @@ fn run_lock() {
                 + std::time::Duration::from_millis(render::BREATHE_INITIAL_DELAY_MS),
         ),
         anim_timer_armed: false,
+        caps_lock: false,
+        layout_index: 0,
+        reveal_held: false,
+        last_activity: std::time::Instant::now(),
+        failed_attempts: 0,
         exit: false,
     };
 

@@ -53,6 +53,10 @@ struct Scene {
     unlock_t: f32,
     breathe_t: f32,
     status_t: f32,
+    caps_lock: bool,
+    layout_index: u32,
+    reveal: bool,
+    idle_dim: f32,
 }
 
 impl Default for Scene {
@@ -73,6 +77,10 @@ impl Default for Scene {
             unlock_t: 0.0,
             breathe_t: 0.0,
             status_t: 1.0,
+            caps_lock: false,
+            layout_index: 0,
+            reveal: false,
+            idle_dim: 0.0,
         }
     }
 }
@@ -109,20 +117,24 @@ fn bench(args: &[String]) {
         font_family: FONT,
         clock_text: "12:34",
         date_text: "Friday · Aug 21",
-        clock_old: None,
-        password_len: 6,
-        failed: false,
-        failed_t: 0.0,
-        dot_pop_t: 1.0,
-        keystroke_age: None,
-        t_secs: 0.0,
-        breathe_t: 0.0,
-        status_t: 1.0,
-        status_text: None,
-        appear_t: 1.0,
-        unlock_t: 0.0,
-        smooth_pan: true,
-    };
+        clock_old: None,            password_len: 6,
+            password: "hunter2",
+            reveal: false,
+            caps_lock: false,
+            layout_index: 0,
+            idle_dim: 0.0,
+            failed: false,
+            failed_t: 0.0,
+            dot_pop_t: 1.0,
+            keystroke_age: None,
+            t_secs: 0.0,
+            breathe_t: 0.0,
+            status_t: 1.0,
+            status_text: None,
+            appear_t: 1.0,
+            unlock_t: 0.0,
+            smooth_pan: true,
+        };
     compose(&mut text, &warm).expect("warm-up compose failed");
 
     // Isolate the background pass cost (wallpaper blit + fills) alone.
@@ -153,6 +165,11 @@ fn bench(args: &[String]) {
             date_text: "Friday · Aug 21",
             clock_old: None,
             password_len: 6,
+            password: "hunter2",
+            reveal: false,
+            caps_lock: false,
+            layout_index: 0,
+            idle_dim: 0.0,
             failed: false,
             failed_t: 0.0,
             dot_pop_t: 1.0,
@@ -223,6 +240,16 @@ fn main() {
         Scene { name: "11-unlock-fade", password_len: 6, unlock_t: 0.8, ..Scene::default() },
         // ---- Minute rollover: old clock fading out above, new fading in below.
         Scene { name: "12-clock-crossfade", clock: "12:35", clock_old: Some(("12:34", 0.5)), password_len: 4, ..Scene::default() },
+        // ---- Caps Lock on: chip above the pill.
+        Scene { name: "13-caps-lock", password_len: 4, caps_lock: true, ..Scene::default() },
+        // ---- Non-default layout: layout chip instead of caps.
+        Scene { name: "14-layout-2", password_len: 4, layout_index: 1, ..Scene::default() },
+        // ---- Hold-to-reveal: plain password characters instead of dots.
+        Scene { name: "15-reveal", password_len: 8, reveal: true, ..Scene::default() },
+        // ---- Idle auto-dim: deepened veil (rest pose + full idle dim).
+        Scene { name: "16-idle-dim", idle_dim: 1.0, ..Scene::default() },
+        // ---- Repeat failure: attempt counter in the status line.
+        Scene { name: "17-failed-3x", password_len: 6, failed: true, failed_t: 0.8, status: Some("Wrong password — 3 failed attempts"), ..Scene::default() },
     ];
 
     let mut text = TextRenderer::new();
@@ -238,6 +265,11 @@ fn main() {
             date_text: scene.date,
             clock_old: scene.clock_old,
             password_len: scene.password_len,
+            password: "hunter2",
+            reveal: scene.reveal,
+            caps_lock: scene.caps_lock,
+            layout_index: scene.layout_index,
+            idle_dim: scene.idle_dim,
             failed: scene.failed,
             failed_t: scene.failed_t,
             dot_pop_t: scene.dot_pop_t,
