@@ -17,7 +17,8 @@ fn load_css() -> String {
          .login-status {{ font-size: 12px; opacity: 0.75; margin-top: 8px; }}\
          .login-status.error {{ color: {red}; opacity: 1; }}\
          .login-session {{ font-size: 12px; opacity: 0.85; margin-top: 12px; }}\
-         dropdown.login-session {{ min-height: 32px; }}",
+         dropdown.login-session {{ min-height: 32px; }}\
+         .login-veil {{ background-image: linear-gradient(to bottom, rgba(0,0,0,0.34) 0%, rgba(0,0,0,0.16) 100%); }}",
         bg = p.background,
         surface = p.color0,
         red = p.color1,

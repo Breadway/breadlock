@@ -64,11 +64,18 @@ impl SimpleComponent for App {
             add_css_class: "breadgreet",
             set_title: Some("breadgreet"),
 
-            #[name = "root_box"]
-            gtk4::Box {
-                set_orientation: gtk4::Orientation::Vertical,
-                set_halign: gtk4::Align::Center,
-                set_valign: gtk4::Align::Center,
+            #[name = "overlay"]
+            gtk4::Overlay {
+                // The relm4 view macro supports a single `set_child` per
+                // widget, so `root_box` is declared as the overlay's child
+                // here; the wallpaper (main child) and veil layers are
+                // stacked in `init` via `set_child` + `add_overlay`.
+                #[name = "root_box"]
+                gtk4::Box {
+                    set_orientation: gtk4::Orientation::Vertical,
+                    set_halign: gtk4::Align::Center,
+                    set_valign: gtk4::Align::Center,
+                }
             }
         }
     }
@@ -139,8 +146,45 @@ impl SimpleComponent for App {
         card.append(&session_widget);
 
         let widgets = view_output!();
+
+        // Layer the window: wallpaper (main child, bottom) → dim veil → the
+        // clock+card cluster (top). Overlay children stack above the main
+        // child in `add_overlay` order, so the card ends up on top.
+        let bg_area = gtk4::DrawingArea::new();
+        bg_area.set_hexpand(true);
+        bg_area.set_vexpand(true);
+
+        let veil = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        veil.set_hexpand(true);
+        veil.set_vexpand(true);
+        veil.set_halign(gtk4::Align::Fill);
+        veil.set_valign(gtk4::Align::Fill);
+        veil.set_can_focus(false);
+        veil.add_css_class("login-veil");
+
+        widgets.overlay.set_child(Some(&bg_area));
+        // Overlay children stack above the main child in `add_overlay`
+        // order; the last one added is topmost. So the veil goes in first,
+        // then the clock+card cluster on top of it.
+        widgets.overlay.add_overlay(&veil);
+        widgets.overlay.add_overlay(&widgets.root_box);
+
         widgets.root_box.append(&clock_lbl);
         widgets.root_box.append(&card);
+
+        // Wallpaper behind the card: cover-fit, Ken Burns pan when enabled
+        // (driven by a frame-clock tick callback), plus an entrance fade+rise.
+        let ken_burns = config.appearance.background.ken_burns;
+        let wallpaper_path = if config.appearance.background.mode
+            == breadlock_ui::config::BackgroundMode::Image
+            && !config.appearance.background.path.is_empty()
+        {
+            Some(config.appearance.background.path.clone())
+        } else {
+            None
+        };
+        setup_wallpaper(&root, &bg_area, wallpaper_path.as_deref(), ken_burns);
+        setup_entrance(&root, &widgets.root_box);
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         spawn_greetd_actor(cmd_rx, sender.clone());
@@ -272,6 +316,97 @@ impl App {
             env: Vec::new(),
         });
     }
+}
+
+/// Paints the configured wallpaper full-screen behind the login card. The
+/// image is loaded once as a `gdk_pixbuf::Pixbuf` and drawn by a
+/// `GtkDrawingArea` draw callback, so the pan costs no layout passes — the
+/// drawing area fills the window and the draw callback applies the cover
+/// scale + Ken Burns offset itself. A missing/unreadable file or a non-image
+/// background leaves the card on the palette background color.
+fn setup_wallpaper(
+    window: &gtk4::ApplicationWindow,
+    bg_area: &gtk4::DrawingArea,
+    path: Option<&str>,
+    ken_burns: bool,
+) {
+    let Some(path) = path else { return };
+    let pixbuf = match gtk4::gdk_pixbuf::Pixbuf::from_file(path) {
+        Ok(pixbuf) => pixbuf,
+        Err(err) => {
+            tracing::warn!(%err, "failed to load wallpaper");
+            return;
+        }
+    };
+    let (iw, ih) = (pixbuf.width() as f32, pixbuf.height() as f32);
+    if iw <= 0.0 || ih <= 0.0 {
+        return;
+    }
+
+    // Shared pan phase: the tick callback advances it, the draw callback
+    // reads it. Using a draw callback (rather than a moving widget) means
+    // the wallpaper never feeds the window's minimum size.
+    let phase = std::rc::Rc::new(std::cell::Cell::new(0.0f64));
+
+    let draw_pixbuf = pixbuf.clone();
+    let draw_phase = phase.clone();
+    bg_area.set_draw_func(move |_area, cr, w, h| {
+        let (w, h) = (w as f32, h as f32);
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        // Cover scale, then the Ken Burns oversize (leaves room to pan).
+        let cover = (w / iw).max(h / ih);
+        let scale = if ken_burns { cover * 1.08 } else { cover };
+        let dw = iw * scale;
+        let dh = ih * scale;
+        // Pan within the oversize margin (0..dw-w, 0..dh-h).
+        let phase = draw_phase.get();
+        let max_x = (dw - w).max(0.0);
+        let max_y = (dh - h).max(0.0);
+        let x = max_x * (0.5 + 0.5 * phase.sin() as f32);
+        let y = max_y * (0.5 + 0.5 * (phase * 0.7).cos() as f32);
+
+        cr.translate(-x as f64, -y as f64);
+        cr.scale(scale as f64, scale as f64);
+        cr.set_source_pixbuf(&draw_pixbuf, 0.0, 0.0);
+        let _ = cr.paint();
+    });
+
+    if !ken_burns {
+        return;
+    }
+
+    let area = bg_area.clone();
+    let start = std::time::Instant::now();
+    window.add_tick_callback(move |_w, _frame_clock| {
+        let elapsed = start.elapsed().as_secs_f64();
+        phase.set(elapsed * std::f64::consts::TAU / 90.0);
+        area.queue_draw();
+        gtk4::glib::ControlFlow::Continue
+    });
+}
+
+/// Entrance animation: the clock + card cluster fades in and rises ~24px
+/// over ~600ms (ease-out), matching the lock screen's appear motion.
+fn setup_entrance(window: &gtk4::ApplicationWindow, root_box: &gtk4::Box) {
+    let root_box = root_box.clone();
+    let start = std::time::Instant::now();
+    const DURATION_MS: f32 = 600.0;
+    const RISE_PX: f32 = 24.0;
+    window.add_tick_callback(move |_w, _frame_clock| {
+        let t = (start.elapsed().as_secs_f32() * 1000.0) / DURATION_MS;
+        let t = t.clamp(0.0, 1.0);
+        // Ease-out cubic.
+        let e = 1.0 - (1.0 - t).powi(3);
+        root_box.set_opacity(e as f64);
+        root_box.set_margin_top((RISE_PX * (1.0 - e)) as i32);
+        if t >= 1.0 {
+            gtk4::glib::ControlFlow::Break
+        } else {
+            gtk4::glib::ControlFlow::Continue
+        }
+    });
 }
 
 /// Owns the single stateful connection to `$GREETD_SOCK` for one login
