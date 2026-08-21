@@ -77,9 +77,120 @@ impl Default for Scene {
     }
 }
 
+/// `--time [WxH] [frames] [wallpaper.png]` — renders the real compose() path
+/// (image background + Ken Burns, full chrome) in a loop and prints per-frame
+/// timings, so the software renderer's cost can be measured without Wayland.
+fn bench(args: &[String]) {
+    let parse = |s: &str, d: &str| -> String { args.iter().find(|a| a.starts_with(s)).map(|a| a[s.len()..].to_string()).unwrap_or_else(|| d.to_string()) };
+    let size: (u32, u32) = {
+        let v: Vec<u32> = parse("--size=", "1920x1200").split('x').filter_map(|s| s.parse().ok()).collect();
+        (v[0], v[1])
+    };
+    let frames: u32 = parse("--frames=", "120").parse().unwrap_or(120);
+    let path = parse("--wallpaper=", "/home/breadway/.config/breadlock/wallpaper.png");
+
+    let palette = theme::load_palette();
+    let bg_cfg = breadlock_ui::config::Background {
+        mode: breadlock_ui::config::BackgroundMode::Image,
+        path,
+        blur: false,
+        ken_burns: true,
+    };
+    let background = background::Background::load(&bg_cfg, &palette);
+
+    let mut text = TextRenderer::new();
+    // Warm up once: the first frame builds the scaled-wallpaper cache and
+    // shapes the glyphs. Steady-state frames are what the timer loop sees.
+    let warm = FrameInputs {
+        width: size.0,
+        height: size.1,
+        background: &background,
+        palette: &palette,
+        font_family: FONT,
+        clock_text: "12:34",
+        date_text: "Friday · Aug 21",
+        clock_old: None,
+        password_len: 6,
+        failed: false,
+        failed_t: 0.0,
+        dot_pop_t: 1.0,
+        keystroke_age: None,
+        t_secs: 0.0,
+        breathe_t: 0.0,
+        status_t: 1.0,
+        status_text: None,
+        appear_t: 1.0,
+        unlock_t: 0.0,
+        smooth_pan: true,
+    };
+    compose(&mut text, &warm).expect("warm-up compose failed");
+
+    // Isolate the background pass cost (wallpaper blit + fills) alone.
+    let mut bg_times = Vec::new();
+    {
+        let mut dummy = tiny_skia::Pixmap::new(size.0, size.1).expect("pixmap");
+        for i in 0..60 {
+            let t = std::time::Instant::now();
+            background.paint(&mut dummy, (i as f32 / 60.0) * 90.0, true);
+            bg_times.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        bg_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let avg: f64 = bg_times.iter().sum::<f64>() / bg_times.len() as f64;
+        println!("background.paint only: avg {avg:.2} ms  max {:.2} ms", bg_times[bg_times.len() - 1]);
+    }
+
+    let mut times = Vec::with_capacity(frames as usize);
+    let start = std::time::Instant::now();
+    for i in 0..frames {
+        let t = std::time::Instant::now();
+        let inputs = FrameInputs {
+            width: size.0,
+            height: size.1,
+            background: &background,
+            palette: &palette,
+            font_family: FONT,
+            clock_text: "12:34",
+            date_text: "Friday · Aug 21",
+            clock_old: None,
+            password_len: 6,
+            failed: false,
+            failed_t: 0.0,
+            dot_pop_t: 1.0,
+            keystroke_age: None,
+            // Walk t_secs through a Ken Burns cycle so every frame differs.
+            t_secs: (i as f32 / frames as f32) * 90.0,
+            breathe_t: (i % 10) as f32 / 10.0,
+            status_t: 1.0,
+            status_text: None,
+            appear_t: 1.0,
+            unlock_t: 0.0,
+            smooth_pan: true,
+        };
+        if compose(&mut text, &inputs).is_none() {
+            eprintln!("compose returned None at frame {i}");
+            std::process::exit(1);
+        }
+        times.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    let total = start.elapsed().as_secs_f64() * 1000.0;
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let avg: f64 = times.iter().sum::<f64>() / times.len() as f64;
+    let p95 = times[(times.len() as f64 * 0.95) as usize];
+    println!(
+        "{frames} frames @ {}x{}: avg {avg:.2} ms  p95 {p95:.2} ms  max {:.2} ms  total {total:.0} ms (first frame excluded from avg? no)",
+        size.0, size.1, times[times.len() - 1]
+    );
+}
+
 fn main() {
-    let out_dir = std::env::args()
-        .nth(1)
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--time") {
+        bench(&args);
+        return;
+    }
+    let out_dir = args
+        .first()
+        .cloned()
         .unwrap_or_else(|| "preview".to_string());
     std::fs::create_dir_all(&out_dir).expect("failed to create preview output dir");
 
@@ -137,6 +248,7 @@ fn main() {
             status_text: scene.status,
             appear_t: scene.appear_t,
             unlock_t: scene.unlock_t,
+            smooth_pan: false,
         };
         let Some(pixmap) = compose(&mut text, &inputs) else {
             eprintln!("compose returned None for scene {}", scene.name);

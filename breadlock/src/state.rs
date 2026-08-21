@@ -26,6 +26,10 @@ pub struct LockSurface {
     pub output: wl_output::WlOutput,
     pub width: u32,
     pub height: u32,
+    /// EGL-backed renderer for this surface (created on first `configure`);
+    /// `None` when the GPU path is unavailable, in which case the software
+    /// wl_shm path is used.
+    pub gpu: Option<crate::gpu::GpuSurface>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +66,9 @@ pub struct AppState {
     pub config: Config,
     pub palette: breadlock_ui::theme::Palette,
     pub background: Background,
+    /// GPU background renderer (EGL/GLES2). `None` falls back to the
+    /// fully-software path.
+    pub gpu: Option<crate::gpu::GpuRenderer>,
     pub text_renderer: breadlock_ui::painter::TextRenderer,
 
     pub username: String,
@@ -227,7 +234,30 @@ impl AppState {
             status_text: status_text.as_deref(),
             appear_t,
             unlock_t,
+            smooth_pan: !self.fast_anim_in_progress(),
         };
+
+        // GPU path: the EGL surface renders the wallpaper (pan/veil in the
+        // shader) and the software-composed chrome on top. Disjoint-field
+        // borrows of `self` make `gpu` + `surfaces` + `text_renderer`
+        // simultaneously mutable.
+        if self.gpu.is_some()
+            && self
+                .surfaces
+                .iter()
+                .any(|s| s.surface.wl_surface() == surface.wl_surface() && s.gpu.is_some())
+        {
+            let renderer = self.gpu.as_mut().expect("checked above");
+            let lock_surface = self
+                .surfaces
+                .iter_mut()
+                .find(|s| s.surface.wl_surface() == surface.wl_surface())
+                .expect("surface exists");
+            let gpu_surface = lock_surface.gpu.as_mut().expect("checked above");
+            renderer.render_frame(gpu_surface, &inputs, &mut self.text_renderer);
+            self.arm_anim_if_needed(qh);
+            return;
+        }
 
         let Some(pixmap) = render::compose(&mut self.text_renderer, &inputs) else {
             return;
@@ -384,6 +414,19 @@ impl AppState {
         }
     }
 
+    /// A 60 fps animation is in flight (everything except the slow idle
+    /// effects: idle breath, Ken Burns pan). Drives both the timer cadence
+    /// and whether background frames get sub-pixel panning.
+    fn fast_anim_in_progress(&self) -> bool {
+        self.appear_in_progress()
+            || self.unlock_in_progress()
+            || self.failed_shake_in_progress()
+            || self.dot_pop_in_progress()
+            || self.clock_fade_in_progress()
+            || self.status_slide_in_progress()
+            || self.auth_state == AuthState::Checking
+    }
+
     fn tick_animation(&mut self, qh: &QueueHandle<Self>) -> TimeoutAction {
         self.redraw_all(qh);
         if self.unlocking.is_some() && !self.unlock_in_progress() {
@@ -392,13 +435,7 @@ impl AppState {
         } else if self.anim_in_progress() {
             // Slow effects (idle breath, Ken Burns) don't need 60fps — halve
             // the redraw cost for them. Everything else stays at ~60Hz.
-            let fast = self.appear_in_progress()
-                || self.unlock_in_progress()
-                || self.failed_shake_in_progress()
-                || self.dot_pop_in_progress()
-                || self.clock_fade_in_progress()
-                || self.status_slide_in_progress()
-                || self.auth_state == AuthState::Checking;
+            let fast = self.fast_anim_in_progress();
             TimeoutAction::ToDuration(Duration::from_millis(if fast {
                 render::ANIM_FRAME_MS
             } else {

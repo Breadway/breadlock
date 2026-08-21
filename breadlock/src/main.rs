@@ -2,6 +2,7 @@ mod auth;
 mod background;
 mod bread_events;
 mod config;
+mod gpu;
 mod input;
 mod lock;
 mod render;
@@ -145,6 +146,15 @@ fn run_lock() {
     let background = Background::load(&config.appearance.background, &palette);
 
     let conn = Connection::connect_to_env().expect("failed to connect to the Wayland display — breadlock must run inside an active Wayland session");
+    // GPU background rendering (EGL/GLES2). Any failure is non-fatal: the
+    // software renderer takes over. `run_lock` is only ever entered in Lock
+    // mode (the listen subscriber never renders), so no mode check here.
+    let gpu = gpu::GpuRenderer::new(&conn, &config.appearance.background, &palette);
+    if gpu.is_some() {
+        tracing::info!("GPU background rendering enabled (EGL/GLES2)");
+    } else {
+        tracing::warn!("GPU background rendering unavailable — using the software renderer");
+    }
     let (globals, event_queue) =
         registry_queue_init::<AppState>(&conn).expect("failed to initialize Wayland registry");
     let qh: QueueHandle<AppState> = event_queue.handle();
@@ -212,6 +222,7 @@ fn run_lock() {
         config,
         palette,
         background,
+        gpu,
         text_renderer: breadlock_ui::painter::TextRenderer::new(),
         username,
         // Pre-reserve capacity so ordinary typing doesn't reallocate — a
@@ -254,6 +265,7 @@ fn run_lock() {
             output,
             width: 0,
             height: 0,
+            gpu: None,
         });
     }
     app_state.session_lock = Some(session_lock);

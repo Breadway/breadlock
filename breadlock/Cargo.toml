@@ -28,8 +28,10 @@ path = "src/bin/breadlock-preview.rs"
 breadlock-ui = { path = "../breadlock-ui", features = ["paint"] }
 bread-utils = { workspace = true, features = ["bread-client"] }
 smithay-client-toolkit = "0.20"
-wayland-client = "0.31"
+wayland-client = { version = "0.31", features = ["system"] }
 tiny-skia = "0.12"
+khronos-egl = { version = "6", features = ["dynamic"] }
+glow = "0.16"
 chrono = "0.4"
 pam-client2 = { version = "0.5", default-features = false }
 zeroize = { version = "1", features = ["std"] }

@@ -16,7 +16,7 @@ use breadlock_ui::painter::{rounded_rect, tokens, TextRenderer};
 use breadlock_ui::theme::tiny_skia_color;
 use std::f32::consts::PI;
 use std::time::Instant;
-use tiny_skia::{Color, Paint, Pixmap, Rect, Transform};
+use tiny_skia::{Color, Paint, Pixmap, Transform};
 
 /// Lock-appear duration: elements ease in on a small stagger (see the
 /// `*_DELAY_MS` consts) instead of one uniform fade.
@@ -62,9 +62,34 @@ const BREATHE_RING_ALPHA: f32 = 0.12;
 /// How far the status line rises during its slide-in.
 const STATUS_SLIDE_PX: f32 = 8.0;
 /// Dim veil over the wallpaper: a vertical gradient, darker at the top so
-/// the clock (in the upper third) sits on the deepest tone.
-const DIM_ALPHA_TOP: f32 = 0.34;
-const DIM_ALPHA_BOTTOM: f32 = 0.16;
+/// the clock (in the upper third) sits on the deepest tone. `pub(crate)` for
+/// the GPU background shader, which applies the same gradient.
+pub(crate) const DIM_ALPHA_TOP: f32 = 0.34;
+pub(crate) const DIM_ALPHA_BOTTOM: f32 = 0.16;
+
+/// Darkens a full-screen pixmap with the vertical dim veil, in place:
+/// premultiplied pixels scale by `1 - lerp(DIM_ALPHA_TOP, DIM_ALPHA_BOTTOM,
+/// y/h) * veil_alpha` (equivalent to blending a black gradient over it). A
+/// single pass over the surface — the software renderer's largest recurring
+/// cost was the full-screen gradient fill/blit, so this keeps it cheap.
+fn dim_rows(pixmap: &mut Pixmap, veil_alpha: f32) {
+    let w = pixmap.width() as usize;
+    let h = pixmap.height() as usize;
+    let data = pixmap.data_mut();
+    for y in 0..h {
+        let a = (DIM_ALPHA_TOP + (DIM_ALPHA_BOTTOM - DIM_ALPHA_TOP) * (y as f32 / h as f32))
+            * veil_alpha;
+        let k = 1.0 - a;
+        let row = y * w * 4;
+        for px in 0..w {
+            let i = row + px * 4;
+            data[i] = (data[i] as f32 * k) as u8;
+            data[i + 1] = (data[i + 1] as f32 * k) as u8;
+            data[i + 2] = (data[i + 2] as f32 * k) as u8;
+            data[i + 3] = (data[i + 3] as f32 * k) as u8;
+        }
+    }
+}
 /// Pill hairline-border alpha (sketch: `1px solid rgba(255,255,255,.08)`).
 const PILL_BORDER_ALPHA: f32 = 0.10;
 /// Fake drop-shadow layers under the pill (tiny-skia has no blur filter):
@@ -130,6 +155,11 @@ pub struct FrameInputs<'a> {
     pub appear_t: f32,
     /// Raw 0..1 unlock-fade progress (pre-ease). 0 when not unlocking.
     pub unlock_t: f32,
+    /// Sub-pixel bilinear panning for the background. True on slow idle frames
+    /// (the Ken Burns drift is ~1 px/frame there and integer steps read as
+    /// judder); false on 60 fps animation frames, where the pan moves < 0.2 px
+    /// per frame and the bilinear pass would blow the 16 ms budget.
+    pub smooth_pan: bool,
 }
 
 /// Ease-out cubic. `t` is clamped to 0..1.
@@ -209,11 +239,63 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     .unwrap_or(a)
 }
 
+/// Bounding rect of the lock-screen chrome (clock, date, pill, status) in
+/// surface pixels — the GPU path uses it to know which region of the chrome
+/// texture was drawn (and therefore needs uploading each frame).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ChromeRect {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
+impl ChromeRect {
+    fn expand(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
+        self.x0 = self.x0.min(x0);
+        self.y0 = self.y0.min(y0);
+        self.x1 = self.x1.max(x1);
+        self.y1 = self.y1.max(y1);
+    }
+}
+
 /// Composes one frame. Returns `None` only if `width`/`height` are degenerate
 /// (a `0x0` `configure`, which some compositors send transiently).
 pub fn compose(text: &mut TextRenderer, inputs: &FrameInputs) -> Option<Pixmap> {
     let mut pixmap = Pixmap::new(inputs.width, inputs.height)?;
-    inputs.background.paint(&mut pixmap, inputs.t_secs);
+    compose_impl(&mut pixmap, text, inputs, None);
+    Some(pixmap)
+}
+
+/// Composes only the chrome (clock/date/pill/status) into a transparent
+/// `pixmap`, returning the bounding rect of everything drawn. The background
+/// and veil are the GPU's job in the accelerated path; colors are still
+/// pre-faded by the veil alpha so the software and GPU paths match.
+pub fn compose_chrome(
+    pixmap: &mut Pixmap,
+    text: &mut TextRenderer,
+    inputs: &FrameInputs,
+) -> ChromeRect {
+    pixmap.fill(Color::TRANSPARENT);
+    let mut rect = ChromeRect::default();
+    compose_impl(pixmap, text, inputs, Some(&mut rect));
+    rect
+}
+
+/// Shared body of [`compose`] / [`compose_chrome`]. With `rects`, the
+/// background/veil are skipped (chrome-only) and each drawn element's box is
+/// recorded.
+fn compose_impl(
+    mut pixmap: &mut Pixmap,
+    text: &mut TextRenderer,
+    inputs: &FrameInputs,
+    mut rects: Option<&mut ChromeRect>,
+) {
+    if rects.is_none() {
+        inputs
+            .background
+            .paint(pixmap, inputs.t_secs, inputs.smooth_pan);
+    }
 
     // Overall chrome fade: appear eased in, unlock eased out. The unlock
     // `fade` multiplies every element below.
@@ -221,7 +303,7 @@ pub fn compose(text: &mut TextRenderer, inputs: &FrameInputs) -> Option<Pixmap> 
     let fade = 1.0 - unlock;
     let (veil_alpha, _) = overlay_motion(inputs.appear_t, inputs.unlock_t);
     if veil_alpha <= 0.0 {
-        return Some(pixmap);
+        return;
     }
 
     let (w, h) = (inputs.width as f32, inputs.height as f32);
@@ -235,30 +317,13 @@ pub fn compose(text: &mut TextRenderer, inputs: &FrameInputs) -> Option<Pixmap> 
     let red_color = faded(tiny_skia_color(&inputs.palette.color1), veil_alpha);
 
     // Translucent veil over the (static) wallpaper — a vertical gradient
-    // (deeper at the top) that fades in with the chrome.
-    if let Some(shader) = tiny_skia::LinearGradient::new(
-        tiny_skia::Point::from_xy(0.0, 0.0),
-        tiny_skia::Point::from_xy(0.0, h),
-        vec![
-            tiny_skia::GradientStop::new(
-                0.0,
-                Color::from_rgba(0.0, 0.0, 0.0, DIM_ALPHA_TOP * veil_alpha)
-                    .unwrap_or(Color::TRANSPARENT),
-            ),
-            tiny_skia::GradientStop::new(
-                1.0,
-                Color::from_rgba(0.0, 0.0, 0.0, DIM_ALPHA_BOTTOM * veil_alpha)
-                    .unwrap_or(Color::TRANSPARENT),
-            ),
-        ],
-        tiny_skia::SpreadMode::Pad,
-        Transform::identity(),
-    ) {
-        let mut paint = Paint::default();
-        paint.shader = shader;
-        if let Some(rect) = Rect::from_xywh(0.0, 0.0, w, h) {
-            pixmap.fill_rect(rect, &paint, Transform::identity(), None);
-        }
+    // (deeper at the top) that fades with the whole chrome. Applied in place
+    // as a per-pixel multiply (premultiplied pixels scale by `1 - a` for a
+    // black overlay), which is far cheaper than a full-surface gradient
+    // fill/blit every frame. Skipped in the chrome-only path (the GPU shader
+    // applies the same veil to the background).
+    if rects.is_none() && veil_alpha > 0.0 {
+        dim_rows(pixmap, veil_alpha);
     }
 
     // Per-element staggered entrance.
@@ -284,6 +349,15 @@ pub fn compose(text: &mut TextRenderer, inputs: &FrameInputs) -> Option<Pixmap> 
     let clock_y_rest = h * 0.28;
     let clock_y = clock_y_rest + elem_y(clock_e, DRIFT_CLOCK);
     let clock_alpha = clock_e * fade;
+    if let Some(r) = rects.as_deref_mut() {
+        let old_w = inputs
+            .clock_old
+            .map(|(t, _)| text.measure_line(t, inputs.font_family, clock_size))
+            .unwrap_or(0.0);
+        let new_w = text.measure_line(inputs.clock_text, inputs.font_family, clock_size);
+        let cw = old_w.max(new_w);
+        r.expand((w - cw) / 2.0, clock_y, (w + cw) / 2.0, clock_y + clock_size);
+    }
     match inputs.clock_old {
         Some((old, t)) => {
             let t = t.clamp(0.0, 1.0);
@@ -332,6 +406,9 @@ pub fn compose(text: &mut TextRenderer, inputs: &FrameInputs) -> Option<Pixmap> 
         let date_y = clock_y_rest + elem_y(date_e, DRIFT_DATE) + clock_top + clock_height
             + tokens::SPACE_SM as f32;
         let date_w = text.measure_line(inputs.date_text, inputs.font_family, date_size);
+        if let Some(r) = rects.as_deref_mut() {
+            r.expand((w - date_w) / 2.0, date_y, (w + date_w) / 2.0, date_y + date_size);
+        }
         text.draw_line(
             &mut pixmap,
             inputs.date_text,
@@ -379,6 +456,17 @@ pub fn compose(text: &mut TextRenderer, inputs: &FrameInputs) -> Option<Pixmap> 
         cx * (1.0 - scale) + shake_x,
         cy * (1.0 - scale),
     );
+    // Chrome rect: pad for the shadow layers, breath/success rings, the
+    // shake offset and the scale overshoot.
+    if let Some(r) = rects.as_deref_mut() {
+        const PILL_PAD: f32 = 26.0;
+        r.expand(
+            pill_x - PILL_PAD,
+            pill_y - PILL_PAD,
+            pill_x + pill_w + PILL_PAD,
+            pill_y + pill_h + PILL_PAD,
+        );
+    }
 
     if let Some(path) =
         rounded_rect(pill_x, pill_y, pill_w, pill_h, tokens::RADIUS_SECONDARY as f32)
@@ -566,6 +654,11 @@ pub fn compose(text: &mut TextRenderer, inputs: &FrameInputs) -> Option<Pixmap> 
         let status_anim = ease_out_cubic(inputs.status_t);
         let status_alpha = status_e * fade * status_anim;
         let color = if inputs.failed { red_color } else { on_surface };
+        let status_y = pill_y_rest + pill_h + tokens::SPACE_MD as f32 + elem_y(status_e, DRIFT_STATUS)
+            + STATUS_SLIDE_PX * (1.0 - status_anim);
+        if let Some(r) = rects.as_deref_mut() {
+            r.expand((w - status_w) / 2.0, status_y, (w + status_w) / 2.0, status_y + status_size);
+        }
         text.draw_line(
             &mut pixmap,
             status,
@@ -573,12 +666,9 @@ pub fn compose(text: &mut TextRenderer, inputs: &FrameInputs) -> Option<Pixmap> 
             status_size,
             faded(color, status_alpha),
             (w - status_w) / 2.0,
-            pill_y_rest + pill_h + tokens::SPACE_MD as f32 + elem_y(status_e, DRIFT_STATUS)
-                + STATUS_SLIDE_PX * (1.0 - status_anim),
+            status_y,
         );
     }
-
-    Some(pixmap)
 }
 
 /// Recomputes the left edge of the dot row (shared by the dot loop and the
@@ -604,6 +694,33 @@ pub fn blit_to_shm(pixmap: &Pixmap, shm_bytes: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dim_rows_darkens_top_more_than_bottom() {
+        // 2 wide × 4 tall: top row is y/h = 0, bottom row is y/h = 0.75.
+        let mut p = Pixmap::new(2, 4).unwrap();
+        p.fill(Color::WHITE);
+        dim_rows(&mut p, 1.0);
+        let px = p.pixels();
+        let top = px[0];
+        let bottom = px[2 * 3];
+        // DIM_ALPHA_TOP (0.34) > DIM_ALPHA_BOTTOM (0.16): top row darker.
+        assert!(top.red() < bottom.red(), "top {} should be darker than bottom {}", top.red(), bottom.red());
+        // White at top dim 0.34 → 255 * (1 - 0.34) = 168.
+        assert_eq!(top.red(), 168);
+        // Bottom row is y/h = 0.75 → dim = 0.34 + (0.16 - 0.34) * 0.75 = 0.205.
+        let expected = (255.0 * (1.0 - 0.205)) as u8;
+        assert_eq!(bottom.red(), expected);
+    }
+
+    #[test]
+    fn dim_rows_noop_at_zero_alpha() {
+        let mut p = Pixmap::new(2, 2).unwrap();
+        p.fill(Color::from_rgba8(100, 150, 200, 255));
+        let before = p.pixels().to_vec();
+        dim_rows(&mut p, 0.0);
+        assert_eq!(p.pixels(), before.as_slice());
+    }
 
     fn inputs<'a>(
         bg: &'a Background,
@@ -637,6 +754,7 @@ mod tests {
             status_text: None,
             appear_t,
             unlock_t,
+            smooth_pan: false,
         }
     }
 
@@ -674,6 +792,7 @@ mod tests {
             status_text: None,
             appear_t: 1.0,
             unlock_t: 0.0,
+            smooth_pan: false,
         };
         let pixmap = compose(&mut text, &inputs).unwrap();
         assert_eq!((pixmap.width(), pixmap.height()), (400, 300));
@@ -764,4 +883,129 @@ mod tests {
         assert_eq!(a, 0.0);
         assert!(y < 0.0, "unlock should drift up from rest, got y={y}");
     }
+
+    #[test]
+    fn compose_chrome_rect_contains_clock_and_pill() {
+        let bg = Background::Color(Color::BLACK);
+        let palette = breadlock_ui::theme::Palette::default();
+        let mut text = TextRenderer::new();
+        let mut pixmap = Pixmap::new(400, 300).unwrap();
+        let inputs = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 1.0, 0.0);
+        let rect = compose_chrome(&mut pixmap, &mut text, &inputs);
+        assert!(
+            rect.x1 > rect.x0 && rect.y1 > rect.y0,
+            "chrome rect must be non-empty, got {rect:?}"
+        );
+        // Clock sits at h*0.28 with glyph height ~ clock_size (400*0.075=30).
+        assert!(rect.y0 < 300.0 * 0.28 + 40.0, "rect must cover the clock band");
+        // Pill sits at h*0.5; with the 26px pad the rect must reach it.
+        assert!(rect.y1 > 300.0 * 0.5 + 24.0, "rect must cover the pill band");
+        // Both are horizontally centered.
+        assert!(rect.x0 < 200.0 && rect.x1 > 200.0, "rect must straddle center");
+    }
+
+    #[test]
+    fn compose_chrome_rect_empty_when_veil_hidden() {
+        let bg = Background::Color(Color::BLACK);
+        let palette = breadlock_ui::theme::Palette::default();
+        let mut text = TextRenderer::new();
+        let mut pixmap = Pixmap::new(400, 300).unwrap();
+        // appear_t = 0 → veil_alpha 0 → nothing drawn, rect stays default.
+        let inputs = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 0.0, 0.0);
+        let rect = compose_chrome(&mut pixmap, &mut text, &inputs);
+        assert!(rect.x1 <= rect.x0 && rect.y1 <= rect.y0, "hidden chrome must yield an empty rect");
+        // And the pixmap is fully transparent.
+        assert!(
+            pixmap.pixels().iter().all(|p| p.alpha() == 0),
+            "hidden chrome must leave the pixmap transparent"
+        );
+    }
+
+    #[test]
+    fn compose_chrome_status_text_expands_the_rect_downward() {
+        let bg = Background::Color(Color::BLACK);
+        let palette = breadlock_ui::theme::Palette::default();
+        let mut text = TextRenderer::new();
+        let mut pixmap = Pixmap::new(400, 300).unwrap();
+        let mut with_status = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, true, 0.3, 1.0, 1.0, 0.0);
+        with_status.status_text = Some("Wrong password");
+        let rect = compose_chrome(&mut pixmap, &mut text, &with_status);
+        // Status sits below the pill: pill bottom is h*0.5 + 24 (half of 48px),
+        // status adds SPACE_MD + its glyph box after that.
+        assert!(
+            rect.y1 > 300.0 * 0.5 + 48.0 + 20.0,
+            "status must push the rect below the pill, got y1={}",
+            rect.y1
+        );
+    }
+
+    #[test]
+    fn gpu_split_is_pixel_identical_to_full_compose() {
+        // The GPU path draws the dimmed background in a shader and then
+        // composites the software chrome (colors pre-faded by the veil alpha)
+        // over it with premultiplied source-over. That split must produce the
+        // exact same pixels as the single-pass software compose — this is the
+        // invariant that keeps the two renderers in sync.
+        let bg = Background::Color(Color::from_rgba8(40, 60, 80, 255));
+        let palette = breadlock_ui::theme::Palette::default();
+        let mut text = TextRenderer::new();
+        let inputs = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 1.0, 0.0);
+
+        // Full single-pass compose.
+        let full = compose(&mut text, &inputs).unwrap();
+
+        // Split: dim the background, then composite the chrome over it.
+        let mut split = Pixmap::new(400, 300).unwrap();
+        inputs.background.paint(&mut split, inputs.t_secs, inputs.smooth_pan);
+        let (veil_alpha, _) = overlay_motion(inputs.appear_t, inputs.unlock_t);
+        if veil_alpha > 0.0 {
+            dim_rows(&mut split, veil_alpha);
+        }
+        let mut chrome = Pixmap::new(400, 300).unwrap();
+        let mut text2 = TextRenderer::new();
+        compose_chrome(&mut chrome, &mut text2, &inputs);
+        // Premultiplied source-over, exactly what the GPU's
+        // glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA) performs.
+        split.draw_pixmap(
+            0,
+            0,
+            chrome.as_ref(),
+            &tiny_skia::PixmapPaint {
+                blend_mode: tiny_skia::BlendMode::SourceOver,
+                ..Default::default()
+            },
+            Transform::default(),
+            None,
+        );
+
+        // The split path rounds twice (chrome into an 8-bit pixmap, then the
+        // composite into 8-bit) where the single pass rounds once, so
+        // bit-exact equality is impossible — the invariant is that the split
+        // stays within a couple of ULPs (measured: max 3 on this input, with
+        // >95% of pixels bit-identical), and never diverges structurally.
+        let diff = split
+            .pixels()
+            .iter()
+            .zip(full.pixels())
+            .map(|(a, b)| {
+                (a.red() as i32 - b.red() as i32).abs()
+                    .max((a.green() as i32 - b.green() as i32).abs())
+                    .max((a.blue() as i32 - b.blue() as i32).abs())
+                    .max((a.alpha() as i32 - b.alpha() as i32).abs())
+            })
+            .collect::<Vec<_>>();
+        let identical = diff.iter().filter(|d| **d == 0).count();
+        let max_diff = diff.iter().copied().max().unwrap_or(0);
+        assert!(
+            max_diff <= 3,
+            "GPU-style split must stay within double-rounding ULP range, got max diff {max_diff}"
+        );
+        assert!(
+            identical > split.pixels().len() * 95 / 100,
+            "most pixels should be bit-identical, got {identical}/{} identical",
+            split.pixels().len()
+        );
+    }
 }
+
+

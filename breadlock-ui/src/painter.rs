@@ -162,32 +162,60 @@ impl TextRenderer {
                 if a == 0 {
                     return;
                 }
-                blend_over_opaque(pixmap, px as u32, py as u32, r, g, b, a);
+                blend_over(pixmap, px as u32, py as u32, r, g, b, a);
             },
         );
     }
 }
 
-/// Alpha-blends a straight-alpha `(r, g, b, a)` source pixel over an
-/// **opaque** destination pixel (always true here — the lock screen
-/// background is painted fully opaque before any text or UI chrome).
-/// Because the destination alpha is always 255, the blended result is also
-/// opaque, so the `PremultipliedColorU8` invariant (`rgb <= a`) always holds.
-fn blend_over_opaque(pixmap: &mut Pixmap, x: u32, y: u32, r: u8, g: u8, b: u8, a: u8) {
+/// Alpha-blends a straight-alpha `(r, g, b, a)` source pixel over a
+/// destination of *any* alpha. Two paths use this:
+///
+/// - **Full compose**: the background is painted fully opaque before any
+///   text, so the destination alpha is always 255 and the result is opaque
+///   (the exact formula below, kept byte-identical to the historic one).
+/// - **GPU chrome** (`compose_chrome`): text is drawn into a *transparent*
+///   pixmap that is later composited over the GPU background, so glyph
+///   edges must keep real alpha — a forced-255 blend here would make every
+///   glyph opaque and, composited over the background, visibly wrong.
+///
+/// Premultiplied source-over: `out = src_pm + dst_pm * (1 - src_a)`, which
+/// preserves the `PremultipliedColorU8` invariant (`rgb <= a`).
+fn blend_over(pixmap: &mut Pixmap, x: u32, y: u32, r: u8, g: u8, b: u8, a: u8) {
     let idx = (y * pixmap.width() + x) as usize;
     let pixels = pixmap.pixels_mut();
     let Some(dst) = pixels.get(idx).copied() else {
         return;
     };
-    let a32 = a as u32;
-    let mix = |s: u8, d: u8| -> u8 { ((s as u32 * a32 + d as u32 * (255 - a32)) / 255) as u8 };
-    let blended = PremultipliedColorU8::from_rgba(
-        mix(r, dst.red()),
-        mix(g, dst.green()),
-        mix(b, dst.blue()),
-        255,
-    );
-    if let Some(blended) = blended {
+    let sa = a as u32;
+    if dst.alpha() == 255 {
+        // Opaque destination: the classic exact blend. RGB mixes toward the
+        // source, alpha stays 255 — identical to the pre-split behavior so
+        // the single-pass software path doesn't move a single pixel.
+        let mix = |s: u8, d: u8| -> u8 { ((s as u32 * sa + d as u32 * (255 - sa)) / 255) as u8 };
+        if let Some(blended) = PremultipliedColorU8::from_rgba(
+            mix(r, dst.red()),
+            mix(g, dst.green()),
+            mix(b, dst.blue()),
+            255,
+        ) {
+            pixels[idx] = blended;
+        }
+        return;
+    }
+    // General (possibly transparent) destination: premultiplied source-over.
+    // out_a = sa + da*(255-sa)/255; out_rgb = src_rgb*sa/255 + dst_rgb*(1-sa).
+    let da = dst.alpha() as u32;
+    let out_a = (sa + da * (255 - sa) / 255) as u8;
+    let out_c = |c: u8, dc: u8| -> u8 {
+        (c as u32 * sa / 255 + dc as u32 * (255 - sa) / 255) as u8
+    };
+    if let Some(blended) = PremultipliedColorU8::from_rgba(
+        out_c(r, dst.red()),
+        out_c(g, dst.green()),
+        out_c(b, dst.blue()),
+        out_a,
+    ) {
         pixels[idx] = blended;
     }
 }
@@ -258,6 +286,47 @@ mod tests {
         assert!(
             low_max < 100,
             "10%-alpha text must not render near-white, got {low_max}"
+        );
+    }
+
+    #[test]
+    fn draw_line_onto_transparent_keeps_real_alpha() {
+        // Regression: the GPU path (compose_chrome) draws text into a
+        // transparent pixmap that is later composited over the GPU background.
+        // The old blend forced output alpha to 255, so every glyph became
+        // opaque and, once composited, rendered visibly wrong (dark, covering
+        // the background instead of blending). Glyph cores must carry real
+        // alpha here so the final source-over composite is correct.
+        let mut renderer = TextRenderer::new();
+
+        let mut t = Pixmap::new(200, 40).unwrap(); // starts transparent
+        renderer.draw_line(
+            &mut t,
+            "12:34",
+            "sans-serif",
+            24.0,
+            tiny_skia::Color::WHITE,
+            0.0,
+            0.0,
+        );
+        // Full-coverage glyph cores are legitimately opaque, but the AA
+        // edges must carry real intermediate alphas — the old forced-255
+        // blend made *every* drawn pixel (edges included) fully opaque.
+        let has_edge = t
+            .pixels()
+            .iter()
+            .any(|p| p.alpha() > 0 && p.alpha() < 255);
+        assert!(
+            has_edge,
+            "glyph AA edges must keep intermediate alphas onto a transparent pixmap"
+        );
+        // And a 50%-alpha draw must not produce fully-opaque pixels.
+        let mut t2 = Pixmap::new(200, 40).unwrap();
+        let half = tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, 0.5).unwrap();
+        renderer.draw_line(&mut t2, "12:34", "sans-serif", 24.0, half, 0.0, 0.0);
+        assert!(
+            t2.pixels().iter().all(|p| p.alpha() <= 128 + 3),
+            "50%-alpha text onto transparent must stay ~half alpha"
         );
     }
 }

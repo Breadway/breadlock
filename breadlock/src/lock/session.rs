@@ -43,6 +43,14 @@ impl SessionLockHandler for AppState {
         {
             s.width = width;
             s.height = height;
+            // Lazily wrap the surface in EGL on its first (sized) configure;
+            // resize the EGL window on subsequent ones.
+            if let Some(renderer) = &self.gpu {
+                match &mut s.gpu {
+                    None => s.gpu = renderer.create_surface(surface.wl_surface(), width, height),
+                    Some(gs) => gs.resize(width, height),
+                }
+            }
         }
         self.redraw_surface(qh, &surface, width, height);
     }
