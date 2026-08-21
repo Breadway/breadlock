@@ -26,6 +26,10 @@ pub struct Background {
     /// v2 feature flag — no-op (with a warning) in v1, which only supports a
     /// static color or image background.
     pub blur: bool,
+    /// Slow Ken Burns pan on image backgrounds (a gentle drift + zoom instead
+    /// of a static image). CPU cost: the background redraws continuously at a
+    /// low frame rate while locked, so this is opt-in.
+    pub ken_burns: bool,
 }
 
 impl Default for Background {
@@ -34,6 +38,7 @@ impl Default for Background {
             mode: BackgroundMode::Color,
             path: String::new(),
             blur: false,
+            ken_burns: false,
         }
     }
 }
@@ -42,12 +47,16 @@ impl Default for Background {
 #[serde(default)]
 pub struct Clock {
     pub format: String,
+    /// strftime format for the date line under the clock. Empty string hides
+    /// the date. `%A` = full weekday, `%b` = abbreviated month, `%d` = day.
+    pub date_format: String,
 }
 
 impl Default for Clock {
     fn default() -> Self {
         Self {
             format: "%H:%M".to_string(),
+            date_format: "%A · %b %d".to_string(),
         }
     }
 }
@@ -89,7 +98,9 @@ mod tests {
     fn defaults_match_design_system() {
         let a = Appearance::default();
         assert_eq!(a.background.mode, BackgroundMode::Color);
+        assert!(!a.background.ken_burns, "Ken Burns must be opt-in (CPU cost)");
         assert_eq!(a.clock.format, "%H:%M");
+        assert_eq!(a.clock.date_format, "%A · %b %d");
         assert_eq!(a.font.family, "Varela Round");
     }
 

@@ -2,6 +2,7 @@ use smithay_client_toolkit::seat::keyboard::{
     KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers,
 };
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
+use std::time::Instant;
 use wayland_client::protocol::{wl_keyboard, wl_seat, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 use zeroize::Zeroize;
@@ -179,6 +180,10 @@ impl AppState {
                     for ch in text.chars().filter(|c| !c.is_control()) {
                         self.password.push(ch);
                     }
+                    // Only keystrokes that *grew* the password re-prime the
+                    // newest-dot pop-in and the caret's solid phase (see the
+                    // `last_keystroke` field doc in state.rs).
+                    self.last_keystroke = Some(Instant::now());
                     self.clear_failed_state();
                 }
             }
@@ -190,6 +195,9 @@ impl AppState {
     fn clear_failed_state(&mut self) {
         if matches!(self.auth_state, AuthState::Failed | AuthState::ConfigError) {
             self.auth_state = AuthState::Idle;
+            // Drop the red-pill tint and shake offsets; `failed_at` is also
+            // cleared so `schedule_clear_failed`'s timer is a no-op.
+            self.failed_at = None;
         }
     }
 

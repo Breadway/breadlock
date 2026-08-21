@@ -8,6 +8,7 @@ pub struct Config {
     #[serde(flatten)]
     pub appearance: Appearance,
     pub input: Input,
+    pub animation: Animation,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -22,6 +23,23 @@ impl Default for Input {
         Self {
             fail_timeout_ms: 800,
         }
+    }
+}
+
+/// Idle animation toggles. Everything here runs on a low-duty-cycle timer so
+/// the software-rendered lock screen doesn't burn CPU while idle.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Animation {
+    /// Subtle glow pulse on the password pill every few seconds — proves the
+    /// screen is live, not frozen. Runs only during a short active window of
+    /// each cycle (see `BREATHE_*` in render.rs).
+    pub breathe: bool,
+}
+
+impl Default for Animation {
+    fn default() -> Self {
+        Self { breathe: true }
     }
 }
 
@@ -44,6 +62,11 @@ mod tests {
     #[test]
     fn default_config_has_expected_fail_timeout() {
         assert_eq!(Config::default().input.fail_timeout_ms, 800);
+    }
+
+    #[test]
+    fn default_animation_breathe_is_on() {
+        assert!(Config::default().animation.breathe);
     }
 
     #[test]

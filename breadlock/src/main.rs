@@ -177,10 +177,12 @@ fn run_lock() {
                             "PAM context initialization failed — check /etc/pam.d/breadlock exists and is valid; authentication cannot succeed until this is fixed"
                         );
                         state.auth_state = AuthState::ConfigError;
+                        state.failed_at = Some(std::time::Instant::now());
                     }
                     auth::AuthError::Authenticate | auth::AuthError::AccountInvalid => {
                         tracing::warn!(%err, "authentication failed");
                         state.auth_state = AuthState::Failed;
+                        state.failed_at = Some(std::time::Instant::now());
                     }
                 }
                 state.schedule_clear_failed(auth_result_qh.clone());
@@ -218,8 +220,20 @@ fn run_lock() {
         password: zeroize::Zeroizing::new(String::with_capacity(128)),
         auth_state: AuthState::Idle,
         auth_tx,
+        started: std::time::Instant::now(),
         appear_started: None,
         unlocking: None,
+        last_keystroke: None,
+        failed_at: None,
+        last_clock_text: String::new(),
+        clock_anim_started: None,
+        status_anim_started: None,
+        last_auth_state: AuthState::Idle,
+        breathe_started: None,
+        breathe_next_at: Some(
+            std::time::Instant::now()
+                + std::time::Duration::from_millis(render::BREATHE_INITIAL_DELAY_MS),
+        ),
         anim_timer_armed: false,
         exit: false,
     };

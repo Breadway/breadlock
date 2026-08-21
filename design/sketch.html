@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>breadlock × breadgreet — style &amp; motion sketch</title>
+<style>
+  /* ============================================================
+     Design tokens — mirrors bread-theme (BREAD_DESIGN_SYSTEM.md)
+     bg/surface/overlay/foreground are the fixed BOS dark base;
+     color1-6 are pywal-derived accents. Two palettes shown:
+     "bread"  = curated bread-toned defaults (fresh install)
+     "tokyo"  = an example pywal palette (Tokyo Night)
+     ============================================================ */
+  :root, [data-palette="bread"] {
+    --bg: #0c0c0c;
+    --surface: #1a1a1a;
+    --surface2: #232323;
+    --overlay: #d8d8d8;
+    --fg: #e8e8e8;
+    --red: #b98749;     /* color1 */
+    --green: #cd9450;   /* color2 */
+    --yellow: #e3a85c;  /* color3 */
+    --accent: #eab672;  /* color4 */
+    --pink: #f6c477;    /* color5 */
+    --teal: #eabe82;    /* color6 */
+    --radius: 8px;      /* primary */
+    --radius-sm: 6px;   /* secondary (inputs) */
+    --font: "Varela Round", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --line: #2b2b2b;
+  }
+  [data-palette="tokyo"] {
+    --red: #f7768e;
+    --green: #9ece6a;
+    --yellow: #e0af68;
+    --accent: #7aa2f7;
+    --pink: #bb9af7;
+    --teal: #7dcfff;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 32px clamp(16px, 4vw, 48px) 80px;
+  }
+
+  header.maxw, main { max-width: 1240px; margin: 0 auto; }
+
+  header h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: .2px; }
+  header p.sub { color: var(--overlay); opacity: .72; margin: 0 0 18px; max-width: 72ch; }
+  header .meta {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px;
+  }
+  .palette-toggle {
+    display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius);
+    overflow: hidden; margin-left: auto;
+  }
+  .palette-toggle button {
+    background: transparent; color: var(--overlay); border: 0; padding: 6px 14px;
+    font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .palette-toggle button.active { background: var(--surface2); color: var(--fg); }
+  .swatches { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .swatch { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--overlay); opacity: .85; }
+  .swatch i { width: 14px; height: 14px; border-radius: 4px; border: 1px solid rgba(255,255,255,.15); display: inline-block; }
+
+  h2 { font-size: 16px; margin: 34px 0 4px; }
+  h2 small { color: var(--overlay); opacity: .6; font-weight: 400; margin-left: 8px; }
+  .hint { color: var(--overlay); opacity: .7; font-size: 12px; margin: 0 0 14px; max-width: 90ch; }
+
+  /* ---------- stages ---------- */
+  .stages { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 960px) { .stages { grid-template-columns: 1fr; } }
+
+  .stage {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 14px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .stage > .stage-head { display: flex; align-items: baseline; gap: 8px; }
+  .stage > .stage-head h3 { margin: 0; font-size: 14px; }
+  .stage > .stage-head span { font-size: 11px; color: var(--overlay); opacity: .6; }
+  .stage .states { display: flex; flex-wrap: wrap; gap: 6px; }
+  .stage .states button {
+    background: var(--surface2); color: var(--overlay); border: 1px solid var(--line);
+    border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  .stage .states button.active { background: var(--accent); color: #0c0c0c; border-color: transparent; font-weight: 700; }
+
+  /* the "monitor" */
+  .screen {
+    position: relative; width: 100%; aspect-ratio: 16 / 9; border-radius: var(--radius-sm);
+    overflow: hidden; border: 1px solid var(--line); background: var(--bg);
+  }
+  .wallpaper, .veil { position: absolute; inset: 0; }
+  [data-palette="bread"] .wallpaper {
+    background:
+      radial-gradient(120% 90% at 18% 8%, #3b2f1e 0%, transparent 55%),
+      radial-gradient(100% 100% at 88% 88%, #2c2313 0%, transparent 60%),
+      linear-gradient(160deg, #17130c 0%, #0c0c0c 72%);
+  }
+  [data-palette="tokyo"] .wallpaper {
+    background:
+      radial-gradient(120% 90% at 18% 8%, #2b3152 0%, transparent 55%),
+      radial-gradient(100% 100% at 88% 88%, #1c2338 0%, transparent 60%),
+      linear-gradient(160deg, #10121c 0%, #0c0c0c 72%);
+  }
+  .veil { background: rgba(0, 0, 0, .28); }   /* DIM_ALPHA = 0.28, fades with chrome */
+
+  /* ---------- breadlock overlay ---------- */
+  .lockoverlay {
+    position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+    padding-top: 12%; transition: opacity 400ms ease, transform 400ms ease;
+  }
+  .screen[data-state="unlock"] .lockoverlay { opacity: 0; transform: translateY(-20px); }
+
+  .lclock {
+    font-size: clamp(34px, 7.5vw, 60px); font-weight: 700; color: #fff; text-align: center;
+    animation: riseIn 450ms ease-out both;
+  }
+  .ldate {
+    font-size: clamp(11px, 1.6vw, 14px); color: rgba(255,255,255,.82); margin-top: 6px;
+    animation: riseIn 450ms ease-out 80ms both;
+  }
+  .badge-new {
+    display: inline-block; vertical-align: middle; margin-left: 6px; padding: 1px 6px;
+    font-size: 9px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase;
+    border-radius: 4px; background: var(--accent); color: #0c0c0c;
+  }
+
+  .pill {
+    position: relative; margin-top: clamp(20px, 5vh, 44px);
+    width: clamp(190px, 36vw, 280px); height: clamp(34px, 6vw, 48px);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    border: 1px solid rgba(255,255,255,.08);
+    display: flex; align-items: center; justify-content: center; gap: clamp(8px, 1.6vw, 18px);
+    animation: popIn 380ms cubic-bezier(.34, 1.56, .64, 1) 100ms both;
+    transition: background-color 150ms ease, border-color 150ms ease;
+    box-shadow: 0 4px 18px rgba(0,0,0,.45);
+  }
+  .dot {
+    width: clamp(6px, 1.1vw, 9px); height: clamp(6px, 1.1vw, 9px); border-radius: 50%;
+    background: var(--accent); animation: dotPop 200ms ease-out both;
+  }
+  .pill .dot:nth-child(1) { animation-delay: 150ms; }
+  .pill .dot:nth-child(2) { animation-delay: 200ms; }
+  .pill .dot:nth-child(3) { animation-delay: 250ms; }
+  .caret {
+    width: 2px; height: 1.2em; background: var(--accent); border-radius: 1px;
+    animation: caretBlink 1.1s steps(1) infinite; opacity: .9;
+  }
+
+  .lstatus { margin-top: 12px; font-size: 12px; color: var(--overlay); min-height: 1em; text-align: center; }
+
+  /* wrong password: shake + red, then fade back */
+  .screen[data-state="wrong"] .pill {
+    background: var(--red); border-color: transparent;
+    animation: shake 380ms cubic-bezier(.36,.07,.19,.97);
+  }
+  .screen[data-state="wrong"] .dot, .screen[data-state="wrong"] .caret { background: #fff; }
+  .screen[data-state="wrong"] .lstatus { color: var(--red); font-weight: 700; }
+
+  /* success: green flash, then the unlock fade is handled by data-state="unlock" */
+  .screen[data-state="success"] .pill { background: var(--green); border-color: transparent; animation: successFlash 300ms ease-out; }
+  .screen[data-state="success"] .dot, .screen[data-state="success"] .caret { background: #fff; }
+  .screen[data-state="success"] .lstatus { color: var(--green); font-weight: 700; }
+
+  .replay {
+    align-self: flex-start; background: transparent; color: var(--accent); border: 1px solid var(--line);
+    border-radius: var(--radius-sm); padding: 4px 12px; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  .replay:hover { border-color: var(--accent); }
+
+  /* ---------- breadgreet ---------- */
+  .greetoverlay {
+    position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 18px;
+  }
+  .gclock { font-size: clamp(28px, 5vw, 44px); font-weight: 700; color: #fff; animation: riseIn 450ms ease-out both; }
+
+  .card {
+    width: clamp(240px, 44vw, 340px); background: var(--surface);
+    border: 1px solid rgba(255,255,255,.08); border-radius: var(--radius);
+    padding: 20px; display: flex; flex-direction: column; gap: 10px;
+    animation: riseIn 450ms ease-out 120ms both;
+    box-shadow: 0 6px 24px rgba(0,0,0,.5);
+  }
+  .gentry {
+    width: 100%; background: var(--surface2); color: var(--fg);
+    border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: 10px 14px; font: inherit; font-size: 14px;
+    transition: border-color 200ms ease, box-shadow 200ms ease;
+  }
+  .gentry:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(234,182,114,.25); }
+  [data-palette="tokyo"] .gentry:focus { box-shadow: 0 0 0 2px rgba(122,162,247,.28); }
+
+  .gstatus { font-size: 12px; color: var(--overlay); opacity: .75; min-height: 1em; text-align: center; transition: opacity 200ms; }
+  .screen[data-state="error"] .gstatus { color: var(--red); opacity: 1; font-weight: 700; }
+
+  .spinner {
+    margin: 0 auto; width: 18px; height: 18px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.15); border-top-color: var(--accent);
+    animation: spin .8s linear infinite; display: none;
+  }
+  .screen[data-state="checking"] .spinner { display: block; }
+
+  .srow {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    background: var(--surface2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: 8px 12px; font-size: 12px; color: var(--overlay);
+  }
+  .srow .icon {
+    width: 20px; height: 20px; border-radius: 5px; flex: none;
+    background: linear-gradient(135deg, var(--accent), var(--teal));
+  }
+  .srow .label { flex: 1; text-align: left; }
+  .srow .chev { color: var(--overlay); opacity: .6; }
+  .screen[data-state="error"] .card { animation: shake 380ms cubic-bezier(.36,.07,.19,.97); }
+
+  /* ---------- keyframes ---------- */
+  @keyframes riseIn { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+  @keyframes popIn { from { opacity: 0; transform: scale(.94); } 70% { transform: scale(1.02); } to { opacity: 1; transform: scale(1); } }
+  @keyframes dotPop { from { transform: scale(0); } 70% { transform: scale(1.35); } to { transform: scale(1); } }
+  @keyframes caretBlink { 0%, 55% { opacity: .9; } 56%, 100% { opacity: 0; } }
+  @keyframes shake {
+    10%, 90% { transform: translateX(-2px); } 20%, 80% { transform: translateX(5px); }
+    30%, 50%, 70% { transform: translateX(-8px); } 40%, 60% { transform: translateX(8px); }
+  }
+  @keyframes successFlash { from { box-shadow: 0 0 0 0 rgba(205,148,80,.55); } to { box-shadow: 0 0 0 22px rgba(205,148,80,0); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes breathe { 0%, 100% { box-shadow: 0 4px 18px rgba(0,0,0,.45); } 50% { box-shadow: 0 4px 26px rgba(0,0,0,.6), 0 0 0 1px rgba(234,182,114,.12); } }
+  @keyframes clockFlip { 0% { opacity: 1; } 45% { opacity: 0; transform: translateY(6px); } 55% { opacity: 0; transform: translateY(-6px); } 100% { opacity: 1; transform: none; } }
+  @keyframes kbdPan { 0% { transform: translateX(-2.5%) scale(1.06); } 100% { transform: translateX(2.5%) scale(1.06); } }
+
+  /* ---------- motion library ---------- */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+  .tile {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 12px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .tile .tname { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+  .tile .tag { font-size: 9px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; padding: 1px 6px; border-radius: 4px; background: var(--surface2); color: var(--overlay); }
+  .tile .tag.S { color: var(--green); } .tile .tag.M { color: var(--yellow); } .tile .tag.L { color: var(--red); }
+  .tile .tnote { font-size: 11px; color: var(--overlay); opacity: .75; min-height: 3em; }
+  .tile .tscreen {
+    position: relative; width: 100%; aspect-ratio: 16 / 7; border-radius: var(--radius-sm);
+    overflow: hidden; background: var(--bg); border: 1px solid var(--line);
+  }
+
+  /* tile demos */
+  .tile .tscreen .tclock { position: absolute; top: 22%; left: 0; right: 0; text-align: center; color: #fff; font-weight: 700; font-size: 22px; }
+  .tile .tscreen .tpill {
+    position: absolute; top: 52%; left: 50%; transform: translateX(-50%);
+    width: 120px; height: 26px; border-radius: var(--radius-sm); background: var(--surface);
+    border: 1px solid rgba(255,255,255,.08); display: flex; align-items: center; justify-content: center; gap: 9px;
+  }
+  .tile .tscreen .tpill i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+  .tile .tscreen .tpill .tc { width: 2px; height: 12px; border-radius: 1px; background: var(--accent); animation: caretBlink 1.1s steps(1) infinite; }
+
+  .tile[data-tile="stagger"] .tclock, .tile[data-tile="stagger"] .tpill { animation: riseIn 450ms ease-out both; }
+  .tile[data-tile="stagger"] .tpill { animation-name: popIn; animation-delay: 140ms; }
+
+  .tile[data-tile="dotpop"] .tpill i:nth-child(1) { animation: dotPop 200ms ease-out 120ms both; }
+  .tile[data-tile="dotpop"] .tpill i:nth-child(2) { animation: dotPop 200ms ease-out 180ms both; }
+  .tile[data-tile="dotpop"] .tpill i:nth-child(3) { animation: dotPop 200ms ease-out 240ms both; }
+
+  .tile[data-tile="shake"] .tpill { background: var(--red); animation: shake 380ms cubic-bezier(.36,.07,.19,.97) 200ms both; }
+  .tile[data-tile="shake"] .tpill i { background: #fff; }
+  .tile[data-tile="shake"] .tstatus { position: absolute; top: 66%; width: 100%; text-align: center; font-size: 10px; color: var(--red); opacity: 0; animation: fadeIn 200ms ease 380ms both; }
+
+  .tile[data-tile="flash"] .tpill { background: var(--green); animation: successFlash 300ms ease-out 200ms both; }
+  .tile[data-tile="flash"] .tpill i { background: #fff; }
+
+  .tile[data-tile="crossfade"] .tclock .old, .tile[data-tile="crossfade"] .tclock .new {
+    position: absolute; inset: 0; transition: opacity 300ms ease, transform 300ms ease;
+  }
+  .tile[data-tile="crossfade"] .tclock .new { opacity: 0; transform: translateY(6px); }
+  .tile[data-tile="crossfade"].ticked .tclock .old { opacity: 0; transform: translateY(-6px); }
+  .tile[data-tile="crossfade"].ticked .tclock .new { opacity: 1; transform: none; }
+
+  .tile[data-tile="breathe"] .tpill { animation: breathe 3.2s ease-in-out infinite; }
+
+  .tile[data-tile="gcard"] .gcard-mini {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: 130px; background: var(--surface); border: 1px solid rgba(255,255,255,.08);
+    border-radius: var(--radius); padding: 10px; animation: riseIn 450ms ease-out both;
+  }
+  .tile[data-tile="gcard"] .gcard-mini b { display: block; height: 12px; border-radius: 4px; background: var(--surface2); }
+  .tile[data-tile="gcard"] .gcard-mini b + b { margin-top: 6px; height: 8px; opacity: .6; }
+
+  .tile[data-tile="focus"] .gcard-mini b:first-child { transition: border-color 200ms, box-shadow 200ms; border: 1px solid var(--line); }
+  .tile[data-tile="focus"].focused .gcard-mini b:first-child { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(234,182,114,.25); }
+
+  .tile[data-tile="spinner"] .spin-mini {
+    position: absolute; top: 50%; left: 50%; width: 20px; height: 20px; margin: -10px 0 0 -10px;
+    border-radius: 50%; border: 2px solid rgba(255,255,255,.15); border-top-color: var(--accent);
+    animation: spin .8s linear infinite;
+  }
+
+  .tile[data-tile="session"] .rows { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 140px; display: flex; flex-direction: column; gap: 5px; }
+  .tile[data-tile="session"] .rows div {
+    display: flex; align-items: center; gap: 7px; background: var(--surface2);
+    border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 5px 8px; font-size: 10px; color: var(--overlay);
+  }
+  .tile[data-tile="session"] .rows div i { width: 12px; height: 12px; border-radius: 3px; background: linear-gradient(135deg, var(--accent), var(--teal)); }
+  .tile[data-tile="session"] .rows div.sel { border-color: var(--accent); color: var(--fg); }
+
+  .tile[data-tile="kenburns"] .tpill { opacity: 0; }
+  .tile[data-tile="kenburns"] .tscreen.noanim::after { animation: none; }
+  .tile[data-tile="kenburns"] .tscreen::after {
+    content: ""; position: absolute; inset: -8%;
+    background: radial-gradient(120% 90% at 18% 8%, #3b2f1e 0%, transparent 55%),
+               radial-gradient(100% 100% at 88% 88%, #2c2313 0%, transparent 60%),
+               linear-gradient(160deg, #17130c 0%, #0c0c0c 72%);
+    animation: kbdPan 9s ease-in-out infinite alternate;
+  }
+
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+  /* ---------- implementation notes ---------- */
+  .notes { margin-top: 34px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 960px) { .notes { grid-template-columns: 1fr; } }
+  .notes .col { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+  .notes h4 { margin: 0 0 10px; font-size: 13px; }
+  .notes ul { margin: 0; padding-left: 18px; font-size: 12px; color: var(--overlay); opacity: .9; }
+  .notes li { margin-bottom: 8px; }
+  .notes code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; color: var(--accent); opacity: .9; }
+  footer { margin-top: 40px; color: var(--overlay); opacity: .55; font-size: 11px; max-width: 100ch; }
+</style>
+</head>
+<body data-palette="bread">
+
+<header class="maxw">
+  <div class="meta">
+    <h1>breadlock × breadgreet — style &amp; motion sketch</h1>
+    <div class="palette-toggle" id="paletteToggle">
+      <button data-palette="bread" class="active">Bread default</button>
+      <button data-palette="tokyo">Pywal (Tokyo Night)</button>
+    </div>
+  </div>
+  <p class="sub">
+    Live CSS prototype of the lock screen and greeter, grounded in the real
+    <code>bread-theme</code> tokens (fixed BOS dark base + pywal accents). The locker's
+    software renderer (tiny-skia) can reproduce every motion here; the greeter uses the
+    same CSS engine directly (GTK4). <b>Badges</b> mark what already ships vs what's proposed.
+  </p>
+  <div class="swatches">
+    <span class="swatch"><i style="background:#0c0c0c"></i>bg</span>
+    <span class="swatch"><i style="background:#1a1a1a"></i>surface</span>
+    <span class="swatch"><i id="swRed" style="background:var(--red)"></i>red</span>
+    <span class="swatch"><i id="swGreen" style="background:var(--green)"></i>green</span>
+    <span class="swatch"><i id="swAccent" style="background:var(--accent)"></i>accent</span>
+  </div>
+</header>
+
+<main>
+  <h2>Live stages <small>click a state chip to replay it</small></h2>
+  <p class="hint">The two apps should feel like one family: same palette, same radius/spacing tokens, same motion language (ease-out, 300–450ms).</p>
+
+  <div class="stages">
+    <!-- ================= breadlock ================= -->
+    <section class="stage">
+      <div class="stage-head"><h3>breadlock</h3><span>tiny-skia · 16ms timer loop · <code>render.rs</code></span></div>
+      <div class="screen" id="lockScreen" data-state="idle">
+        <div class="wallpaper"></div>
+        <div class="veil"></div>
+        <div class="lockoverlay">
+          <div class="lclock">21:47<span class="badge-new">date</span><div class="ldate">Friday · Aug 21</div></div>
+          <div class="pill">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <span class="caret" title="proposed"></span>
+          </div>
+          <div class="lstatus" id="lockStatus"></div>
+        </div>
+      </div>
+      <div class="states" data-screen="lockScreen">
+        <button data-state="idle" class="active">Idle</button>
+        <button data-state="typing">Typing</button>
+        <button data-state="wrong">Wrong pw</button>
+        <button data-state="success">Success</button>
+        <button data-state="unlock">Unlock</button>
+      </div>
+      <button class="replay" data-replay="lockScreen">Replay entrance</button>
+    </section>
+
+    <!-- ================= breadgreet ================= -->
+    <section class="stage">
+      <div class="stage-head"><h3>breadgreet</h3><span>GTK4 · relm4 · CSS in <code>theme.rs</code></span></div>
+      <div class="screen" id="greetScreen" data-state="username">
+        <div class="wallpaper"></div>
+        <div class="veil"></div>
+        <div class="greetoverlay">
+          <div class="gclock">21:47</div>
+          <div class="card">
+            <input class="gentry" id="greetEntry" type="text" placeholder="Username" />
+            <div class="gstatus" id="greetStatus"></div>
+            <div class="spinner"></div>
+            <div class="srow">
+              <span class="icon"></span>
+              <span class="label">bos — Hyprland <span class="badge-new">icon</span></span>
+              <span class="chev">▾</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="states" data-screen="greetScreen">
+        <button data-state="username" class="active">Username</button>
+        <button data-state="prompt">Password prompt</button>
+        <button data-state="checking">Checking…</button>
+        <button data-state="error">Wrong pw</button>
+      </div>
+      <button class="replay" data-replay="greetScreen">Replay entrance</button>
+    </section>
+  </div>
+
+  <h2>Motion library <small>proposed animations, mapped to where each lands</small></h2>
+  <p class="hint">Every idea below is prototypeable in CSS first, then ported. Effort: <b style="color:var(--green)">S</b> small ·
+  <b style="color:var(--yellow)">M</b> medium · <b style="color:var(--red)">L</b> large (protocol/CPU work).</p>
+
+  <div class="tiles">
+    <div class="tile" data-tile="stagger">
+      <div class="tname">Entrance stagger <span class="tag S">S</span></div>
+      <div class="tscreen"><div class="tclock">21:47</div><div class="tpill"><i></i><i></i><i></i></div></div>
+      <div class="tnote">Clock → pill → status cascade instead of one uniform fade. Pill overshoots ~2% (ease-out-back). Replaces the single overlay motion in <code>render.rs</code>.</div>
+      <button class="replay" data-replay="tile-stagger">Replay</button>
+    </div>
+
+    <div class="tile" data-tile="dotpop">
+      <div class="tname">Dot pop + caret <span class="tag S">S</span></div>
+      <div class="tscreen"><div class="tpill"><i></i><i></i><i></i><span class="tc"></span></div></div>
+      <div class="tnote">Newest password dot scales in with overshoot; a blinking caret marks where you're typing. Today dots just appear — <code>render.rs</code> dot loop.</div>
+      <button class="replay" data-replay="tile-dotpop">Replay</button>
+    </div>
+
+    <div class="tile" data-tile="shake">
+      <div class="tname">Wrong-password shake <span class="tag S">S</span></div>
+      <div class="tscreen"><div class="tpill"><i></i><i></i><i></i></div><div class="tstatus">Wrong password</div></div>
+      <div class="tnote">The classic, currently reserved for v2 — failure is just a red pill today. Damped 8px shake, red fill, auto-clear after <code>fail_timeout_ms</code>.</div>
+      <button class="replay" data-replay="tile-shake">Replay</button>
+    </div>
+
+    <div class="tile" data-tile="flash">
+      <div class="tname">Success flash → unlock drift <span class="tag S">S</span></div>
+      <div class="tscreen"><div class="tpill"><i></i><i></i><i></i></div></div>
+      <div class="tnote">Correct password: green (<code>color2</code>) flash + glow ring, then the existing 400ms fade-and-drift-up unlock in <code>state.rs</code>.</div>
+      <button class="replay" data-replay="tile-flash">Replay</button>
+    </div>
+
+    <div class="tile" data-tile="crossfade">
+      <div class="tname">Clock minute crossfade <span class="tag S">S</span></div>
+      <div class="tscreen"><div class="tclock"><span class="old">21:47</span><span class="new">21:48</span></div></div>
+      <div class="tnote">300ms dip-and-swap on the minute tick instead of a hard blink. Locker: crossfade layer in <code>render.rs</code>. Greeter: GTK CSS transition.</div>
+      <button class="replay" data-replay="tile-crossfade">Tick</button>
+    </div>
+
+    <div class="tile" data-tile="breathe">
+      <div class="tname">Idle breathing <span class="tag S">S</span></div>
+      <div class="tscreen"><div class="tpill"><i></i><i></i><i></i></div></div>
+      <div class="tnote">Very subtle 3–4s sine on the pill's glow — proof the screen is live, not frozen. Cheap in <code>render.rs</code>; keep amplitude tiny (CPU is software-rendered).</div>
+      <button class="replay" data-replay="tile-breathe">Replay</button>
+    </div>
+
+    <div class="tile" data-tile="gcard">
+      <div class="tname">Greeter card entrance <span class="tag S">S</span></div>
+      <div class="tscreen"><div class="gcard-mini"><b></b><b></b></div></div>
+      <div class="tnote">Greeter currently has zero animation. Fade + 18px rise, staggered after the clock — GTK4 CSS <code>@keyframes</code> in <code>breadgreet/theme.rs</code>.</div>
+      <button class="replay" data-replay="tile-gcard">Replay</button>
+    </div>
+
+    <div class="tile" data-tile="focus">
+      <div class="tname">Entry focus ring <span class="tag S">S</span></div>
+      <div class="tscreen"><div class="gcard-mini"><b></b><b></b></div></div>
+      <div class="tnote">Accent border + soft glow on focus, 200ms transition. Standard GTK CSS <code>:focus</code> — matches the shared stylesheet's "blue on focus" input rule.</div>
+      <button class="replay" data-replay="tile-focus">Focus</button>
+    </div>
+
+    <div class="tile" data-tile="spinner">
+      <div class="tname">Auth spinner <span class="tag S">S</span></div>
+      <div class="tscreen"><div class="spin-mini"></div></div>
+      <div class="tnote">Real <code>gtk::Spinner</code> during <code>Stage::Working</code> instead of static "Checking…" text. One widget swap in <code>breadgreet/main.rs</code>.</div>
+      <button class="replay" data-replay="tile-spinner">Replay</button>
+    </div>
+
+    <div class="tile" data-tile="session">
+      <div class="tname">Session icon rows <span class="tag M">M</span></div>
+      <div class="tscreen"><div class="rows"><div class="sel"><i></i>bos — Hyprland</div><div><i></i>Hyprland</div></div></div>
+      <div class="tnote"><code>sessions.rs</code> doesn't parse <code>Icon=</code> today. Custom dropdown rows with per-session icons; falls back to a letter tile.</div>
+      <button class="replay" data-replay="tile-session">Replay</button>
+    </div>
+
+    <div class="tile" data-tile="kenburns">
+      <div class="tname">Wallpaper Ken Burns <span class="tag M">M</span></div>
+      <div class="tscreen"><div class="tpill"><i></i></div></div>
+      <div class="tnote">Slow pan on image wallpapers — just a drifting <code>Transform</code> in <code>background.rs::paint</code>, no new protocol. Gate behind config (CPU cost).</div>
+      <button class="replay" data-replay="tile-kenburns">Replay</button>
+    </div>
+  </div>
+
+  <div class="notes">
+    <div class="col">
+      <h4>breadlock — where things land</h4>
+      <ul>
+        <li><b>Motion</b>: extend the existing <code>anim_timer</code>/<code>tick_animation</code> loop in <code>state.rs</code>; add per-element progress fields (appear started per element, fail-shake start, dot-pop start).</li>
+        <li><b>Frame math</b>: all easing lives in <code>render.rs</code> (<code>ease_out_cubic</code>, <code>overlay_motion</code>). Add <code>ease_out_back</code> for the pill overshoot and a damped sinusoid for the shake.</li>
+        <li><b>Success flash</b>: reuse <code>unlocking: Option&lt;Instant&gt;</code> — flash phase 0–250ms, fade 250–650ms, then <code>unlock()</code>.</li>
+        <li><b>Bigger</b>: live blur-of-desktop needs a <code>wlr-screencopy</code> capture (already flagged v2 in README) — software downscale → blur → upscale to keep CPU sane. New <code>[animation]</code> config section (enabled / speed / per-effect toggles).</li>
+      </ul>
+    </div>
+    <div class="col">
+      <h4>breadgreet — where things land</h4>
+      <ul>
+        <li><b>Motion</b>: GTK4 CSS supports <code>@keyframes</code>/<code>animation</code> and transitions — everything goes in <code>breadgreet/theme.rs::load_css</code>, no Rust logic needed for entrance/focus/status.</li>
+        <li><b>Spinner</b>: swap the status label for a <code>gtk::Spinner</code> during <code>Stage::Working</code> in <code>main.rs</code>.</li>
+        <li><b>Session icons</b>: parse <code>Icon=</code> in <code>sessions.rs</code> and switch <code>DropDown</code> to custom rows.</li>
+        <li><b>Unify with the locker</b>: same clock sizing/weight, same radius + spacing tokens; card <code>backdrop-filter: blur()</code> if GTK ≥ 4.12 supports it (README already requires 4.12).</li>
+      </ul>
+    </div>
+  </div>
+
+  <footer>
+    Sketch mirrors <code>breadlock/src/render.rs</code> + <code>state.rs</code>, <code>breadgreet/src/theme.rs</code> + <code>main.rs</code>, and the tokens in
+    <code>bread-ecosystem/BREAD_DESIGN_SYSTEM.md</code> / <code>bread-theme/src/palette.rs</code>. Palette: fixed BOS dark base
+    (bg <code>#0c0c0c</code>, surface <code>#1a1a1a</code>, overlay <code>#d8d8d8</code>) with pywal-driven accents (color1–6).
+    The "bread" palette's red/green/accent are the curated bread-toned defaults, which is why "wrong password" is brownish until pywal is active.
+  </footer>
+</main>
+
+<script>
+  /* Palette toggle */
+  const toggle = document.getElementById("paletteToggle");
+  toggle.addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    document.body.dataset.palette = btn.dataset.palette;
+    toggle.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
+  });
+
+  /* Restart a stylesheet-driven CSS animation: drop the animation via an
+     inline override, force a reflow, then remove the override so the rule
+     applies again from its first frame. */
+  function replayAnim(el) {
+    el.style.animation = "none";
+    void el.offsetWidth;
+    el.style.animation = "";
+  }
+
+  /* ---- breadlock stage ---- */
+  const lockScreen = document.getElementById("lockScreen");
+  const lockStatus = document.getElementById("lockStatus");
+
+  function setLockState(state) {
+    // The attribute change is what starts each CSS animation; bounce through
+    // idle so repeat clicks on the same chip replay it.
+    if (state === "wrong" || state === "success" || state === "unlock") {
+      lockScreen.dataset.state = "idle";
+      void lockScreen.offsetWidth;
+    }
+    lockScreen.dataset.state = state;
+    document.querySelectorAll('[data-screen="lockScreen"] button').forEach((b) =>
+      b.classList.toggle("active", b.dataset.state === state));
+
+    switch (state) {
+      case "typing":
+        lockScreen.querySelectorAll(".dot").forEach(replayAnim);
+        lockStatus.textContent = "";
+        break;
+      case "wrong":
+        lockStatus.textContent = "Wrong password";
+        setTimeout(() => { if (lockScreen.dataset.state === "wrong") setLockState("idle"); }, 1200);
+        break;
+      case "success":
+        lockStatus.textContent = "✓ Unlocked";
+        setTimeout(() => setLockState("unlock"), 600);
+        break;
+      case "unlock":
+        setTimeout(() => { setLockState("idle"); replayLockEntrance(); }, 900);
+        break;
+      default:
+        lockStatus.textContent = "";
+    }
+  }
+
+  function replayLockEntrance() {
+    replayAnim(lockScreen.querySelector(".lclock"));
+    replayAnim(lockScreen.querySelector(".ldate"));
+    replayAnim(lockScreen.querySelector(".pill"));
+  }
+  document.querySelectorAll('[data-screen="lockScreen"] button').forEach((b) =>
+    b.addEventListener("click", () => setLockState(b.dataset.state)));
+  document.querySelector('[data-replay="lockScreen"]').addEventListener("click", replayLockEntrance);
+
+  /* ---- breadgreet stage ---- */
+  const greetScreen = document.getElementById("greetScreen");
+  const greetEntry = document.getElementById("greetEntry");
+  const greetStatus = document.getElementById("greetStatus");
+  const greetStates = {
+    username: { placeholder: "Username", status: "" },
+    prompt:   { placeholder: "Password", status: "Password for breadway" },
+    checking: { placeholder: "Password", status: "Checking…" },
+    error:    { placeholder: "Password", status: "Wrong password" },
+  };
+
+  function setGreetState(state) {
+    if (state === "error") {
+      greetScreen.dataset.state = "username";
+      void greetScreen.offsetWidth;
+    }
+    greetScreen.dataset.state = state;
+    document.querySelectorAll('[data-screen="greetScreen"] button').forEach((b) =>
+      b.classList.toggle("active", b.dataset.state === state));
+    const s = greetStates[state];
+    greetEntry.placeholder = s.placeholder;
+    greetStatus.textContent = s.status;
+    if (state === "error") {
+      setTimeout(() => { if (greetScreen.dataset.state === "error") setGreetState("prompt"); }, 1200);
+    } else if (state === "checking") {
+      setTimeout(() => { if (greetScreen.dataset.state === "checking") setGreetState("username"); }, 1600);
+    }
+  }
+  document.querySelectorAll('[data-screen="greetScreen"] button').forEach((b) =>
+    b.addEventListener("click", () => setGreetState(b.dataset.state)));
+  document.querySelector('[data-replay="greetScreen"]').addEventListener("click", () => {
+    replayAnim(greetScreen.querySelector(".gclock"));
+    replayAnim(greetScreen.querySelector(".card"));
+  });
+
+  /* ---- motion library ---- */
+  const tileActions = {
+    "tile-stagger":   (t) => { replayAnim(t.querySelector(".tclock")); replayAnim(t.querySelector(".tpill")); },
+    "tile-dotpop":    (t) => t.querySelectorAll(".tpill i").forEach(replayAnim),
+    "tile-shake":     (t) => { replayAnim(t.querySelector(".tpill")); replayAnim(t.querySelector(".tstatus")); },
+    "tile-flash":     (t) => replayAnim(t.querySelector(".tpill")),
+    "tile-crossfade": (t) => t.classList.toggle("ticked"),
+    "tile-breathe":   (t) => replayAnim(t.querySelector(".tpill")),
+    "tile-gcard":     (t) => replayAnim(t.querySelector(".gcard-mini")),
+    "tile-focus":     (t) => t.classList.toggle("focused"),
+    "tile-spinner":   () => {},
+    "tile-session":   (t) => replayAnim(t.querySelector(".rows")),
+    "tile-kenburns":  (t) => {
+      const sc = t.querySelector(".tscreen");
+      sc.classList.add("noanim");
+      void sc.offsetWidth;
+      sc.classList.remove("noanim");
+    },
+  };
+  document.querySelectorAll(".tile").forEach((tile) => {
+    const btn = tile.querySelector(".replay");
+    if (!btn) return;
+    btn.addEventListener("click", () => tileActions["tile-" + tile.dataset.tile]?.(tile));
+  });
+
+  /* Boot the lock stage with the entrance visible. */
+  replayLockEntrance();
+</script>
+</body>
+</html>

@@ -8,10 +8,16 @@ path = ""
 # v2 feature — accepted but currently just logs a warning and shows the
 # background unblurred (needs a wlr-screencopy capture, not implemented yet).
 blur = false
+# Slow Ken Burns pan on image backgrounds (gentle drift + zoom). Opt-in: the
+# background redraws continuously at a low frame rate while locked.
+ken_burns = false
 
 [clock]
 # strftime format
 format = "%H:%M"
+# strftime format for the date line under the clock; empty string hides it
+# (e.g. %A · %b %d → "Friday · Aug 21")
+date_format = "%A · %b %d"
 
 [font]
 family = "Varela Round"
@@ -20,3 +26,7 @@ family = "Varela Round"
 # How long the "wrong password" state (red pill) shows before input
 # re-enables, in milliseconds.
 fail_timeout_ms = 800
+
+[animation]
+# Subtle glow pulse on the password pill every few seconds while idle.
+breathe = true

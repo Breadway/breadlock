@@ -17,6 +17,13 @@ path = "src/main.rs"
 name = "breadlock-auth-check"
 path = "src/bin/breadlock-auth-check.rs"
 
+# Dev-only harness: renders the lock-screen motion system (render.rs) to a
+# folder of PNGs with no Wayland involved, for eyeballing animations without
+# locking a session. Not installed by the package.
+[[bin]]
+name = "breadlock-preview"
+path = "src/bin/breadlock-preview.rs"
+
 [dependencies]
 breadlock-ui = { path = "../breadlock-ui", features = ["paint"] }
 bread-utils = { workspace = true, features = ["bread-client"] }

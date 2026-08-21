@@ -9,9 +9,13 @@
 mode = "color"
 path = ""
 blur = false
+# (Ken Burns is a breadlock-only background effect; not used by the greeter.)
+ken_burns = false
 
 [clock]
 format = "%H:%M"
+# strftime format for the date line under the clock; empty string hides it
+date_format = "%A · %b %d"
 
 [font]
 family = "Varela Round"
