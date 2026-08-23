@@ -42,12 +42,15 @@ pub fn load() -> Config {
     breadlock_ui::config::load_or_default(&xdg_config_path())
 }
 
-fn xdg_config_path() -> PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
+pub(crate) fn xdg_config_dir() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("breadgreet").join("breadgreet.toml")
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn xdg_config_path() -> PathBuf {
+    xdg_config_dir().join("breadgreet").join("breadgreet.toml")
 }
 
 #[cfg(test)]

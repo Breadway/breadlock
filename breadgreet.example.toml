@@ -9,7 +9,8 @@
 mode = "color"
 path = ""
 blur = false
-# (Ken Burns is a breadlock-only background effect; not used by the greeter.)
+# Slow Ken Burns pan on image backgrounds (gentle drift + zoom). Opt-in: the
+# background redraws continuously at a low frame rate.
 ken_burns = false
 
 [clock]

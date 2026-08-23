@@ -9,6 +9,12 @@
 use breadlock_ui::desktop_entry::scan_dir;
 use std::path::Path;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionKind {
+    Wayland,
+    X11,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
     /// `.desktop` file stem (`bos` for `bos.desktop`) — used to match
@@ -16,22 +22,50 @@ pub struct Session {
     pub stem: String,
     pub name: String,
     pub exec: Vec<String>,
+    /// Which directory list this entry came from — drives `XDG_SESSION_TYPE`.
+    pub kind: SessionKind,
+}
+
+impl Session {
+    /// Environment greetd should apply to the started session.
+    pub fn start_env(&self) -> Vec<String> {
+        let session_type = match self.kind {
+            SessionKind::Wayland => "wayland",
+            SessionKind::X11 => "x11",
+        };
+        let desktop = if self.stem.is_empty() {
+            self.name.as_str()
+        } else {
+            self.stem.as_str()
+        };
+        vec![
+            format!("XDG_SESSION_TYPE={session_type}"),
+            format!("XDG_SESSION_DESKTOP={desktop}"),
+            format!("XDG_CURRENT_DESKTOP={desktop}"),
+        ]
+    }
 }
 
 /// Every installed session, `wayland_dirs` first then `xsessions_dirs`.
 /// Each directory is sorted by stem (see [`scan_dir`]).
 pub fn list(wayland_dirs: &[String], xsessions_dirs: &[String]) -> Vec<Session> {
     let mut all = Vec::new();
-    for dir in wayland_dirs.iter().chain(xsessions_dirs) {
+    collect_into(&mut all, wayland_dirs, SessionKind::Wayland);
+    collect_into(&mut all, xsessions_dirs, SessionKind::X11);
+    all
+}
+
+fn collect_into(all: &mut Vec<Session>, dirs: &[String], kind: SessionKind) {
+    for dir in dirs {
         for (stem, entry) in scan_dir(Path::new(dir)) {
             all.push(Session {
                 stem,
                 name: entry.name,
                 exec: split_exec(&entry.exec),
+                kind,
             });
         }
     }
-    all
 }
 
 /// Index of the configured default stem, or `0` if it is absent. Callers
@@ -54,16 +88,65 @@ pub fn discover(
     all.into_iter().nth(idx)
 }
 
-/// Splits a `.desktop` `Exec=` line into an argv. Only handles plain
-/// whitespace-separated commands (BOS's own `hyprland.desktop` is
-/// `Exec=Hyprland`) — full field-code (`%f`, `%u`, …) and quoting support
-/// isn't needed for a greeter that never launches file-manager-style
-/// entries.
+/// Splits a `.desktop` `Exec=` line into an argv. Double-quoted arguments
+/// are one token (Freedesktop Exec quoting). Whole-argument field codes
+/// (`%f`, `%F`, …) are dropped; `%%` is a literal `%`.
 fn split_exec(exec: &str) -> Vec<String> {
-    exec.split_whitespace()
-        .filter(|arg| !arg.starts_with('%'))
-        .map(str::to_string)
+    tokenize_exec(exec)
+        .into_iter()
+        .filter(|arg| !is_field_code(arg))
+        .map(|arg| unescape_percent(&arg))
+        .filter(|arg| !arg.is_empty())
         .collect()
+}
+
+fn tokenize_exec(exec: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quote = false;
+    let mut chars = exec.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => in_quote = !in_quote,
+            '\\' if in_quote => {
+                if let Some(n) = chars.next() {
+                    current.push(n);
+                }
+            }
+            c if c.is_whitespace() && !in_quote => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    args
+}
+
+fn is_field_code(arg: &str) -> bool {
+    matches!(
+        arg,
+        "%f" | "%F" | "%u" | "%U" | "%d" | "%D" | "%n" | "%N" | "%i" | "%c" | "%k" | "%v" | "%m"
+    )
+}
+
+fn unescape_percent(arg: &str) -> String {
+    let mut out = String::with_capacity(arg.len());
+    let mut chars = arg.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' && chars.peek() == Some(&'%') {
+            chars.next();
+            out.push('%');
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -74,6 +157,20 @@ mod tests {
     fn split_exec_drops_field_codes() {
         assert_eq!(split_exec("Hyprland"), vec!["Hyprland"]);
         assert_eq!(split_exec("gnome-session %U"), vec!["gnome-session"]);
+    }
+
+    #[test]
+    fn split_exec_quoted_arguments() {
+        assert_eq!(
+            split_exec(r#"wrapper "my session" --flag"#),
+            vec!["wrapper", "my session", "--flag"]
+        );
+    }
+
+    #[test]
+    fn split_exec_double_percent_is_literal() {
+        assert_eq!(split_exec("echo %%"), vec!["echo", "%"]);
+        assert_eq!(split_exec(r#"echo "100%%""#), vec!["echo", "100%"]);
     }
 
     #[test]
@@ -109,6 +206,7 @@ mod tests {
         assert_eq!(session.stem, "hyprland");
         assert_eq!(session.name, "Hyprland");
         assert_eq!(session.exec, vec!["Hyprland"]);
+        assert_eq!(session.kind, SessionKind::Wayland);
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -131,6 +229,23 @@ mod tests {
         let stems: Vec<&str> = listed.iter().map(|s| s.stem.as_str()).collect();
         assert_eq!(stems, vec!["bos", "hyprland", "openbox"]);
         assert_eq!(listed[0].exec, vec!["/usr/local/bin/bos-session"]);
+        assert_eq!(listed[0].kind, SessionKind::Wayland);
+        assert_eq!(listed[2].kind, SessionKind::X11);
+        assert!(
+            listed[2]
+                .start_env()
+                .contains(&"XDG_SESSION_TYPE=x11".to_string())
+        );
+        assert!(
+            listed[0]
+                .start_env()
+                .contains(&"XDG_SESSION_TYPE=wayland".to_string())
+        );
+        assert!(
+            listed[0]
+                .start_env()
+                .contains(&"XDG_SESSION_DESKTOP=bos".to_string())
+        );
 
         std::fs::remove_dir_all(&wayland).ok();
         std::fs::remove_dir_all(&x11).ok();
@@ -143,11 +258,13 @@ mod tests {
                 stem: "aaa".into(),
                 name: "A".into(),
                 exec: vec!["a".into()],
+                kind: SessionKind::Wayland,
             },
             Session {
                 stem: "bos".into(),
                 name: "BOS".into(),
                 exec: vec!["bos-session".into()],
+                kind: SessionKind::Wayland,
             },
         ];
         assert_eq!(default_index(&sessions, "bos"), 1);

@@ -59,7 +59,7 @@ impl Client {
     /// used directly by tests against a mock server so they don't need to
     /// mutate process-global environment state (which parallel `cargo test`
     /// threads would race on).
-    async fn connect_to(path: impl AsRef<std::path::Path>) -> Result<Self, GreetdError> {
+    pub(crate) async fn connect_to(path: impl AsRef<std::path::Path>) -> Result<Self, GreetdError> {
         let stream = UnixStream::connect(path)
             .await
             .map_err(GreetdError::Connect)?;
@@ -149,10 +149,21 @@ mod tests {
     //! PAM involved. This is the safe way to test this module: a bug here
     //! just fails a test, it can never affect a real login.
     use super::*;
+    use greetd_ipc::codec::TokioCodec;
+    use greetd_ipc::{AuthMessageType, ErrorType, Request, Response};
     use tokio::net::UnixListener;
 
-    async fn mock_server(path: std::path::PathBuf, script: Vec<Response>) {
+    fn bind_socket(name: &str) -> (std::path::PathBuf, UnixListener) {
+        let path = std::env::temp_dir().join(format!(
+            "breadgreet-test-{name}-{}.sock",
+            std::process::id()
+        ));
+        std::fs::remove_file(&path).ok();
         let listener = UnixListener::bind(&path).unwrap();
+        (path, listener)
+    }
+
+    async fn serve(listener: UnixListener, script: Vec<Response>) {
         let (mut stream, _) = listener.accept().await.unwrap();
         for response in script {
             // Drain the request that prompted this response — we don't need
@@ -162,21 +173,11 @@ mod tests {
         }
     }
 
-    fn socket_path(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "breadgreet-test-{name}-{}.sock",
-            std::process::id()
-        ))
-    }
-
     #[tokio::test]
     async fn create_session_success_flows_straight_through() {
-        let path = socket_path("success");
-        std::fs::remove_file(&path).ok();
-        let server = tokio::spawn(mock_server(path.clone(), vec![Response::Success]));
+        let (path, listener) = bind_socket("success");
+        let server = tokio::spawn(serve(listener, vec![Response::Success]));
 
-        // Give the listener a moment to bind before connecting.
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         let mut client = Client::connect_to(&path).await.unwrap();
         let outcome = client.create_session("bob").await.unwrap();
         assert!(matches!(outcome, Outcome::Success));
@@ -187,10 +188,9 @@ mod tests {
 
     #[tokio::test]
     async fn create_session_prompts_for_password_then_succeeds() {
-        let path = socket_path("prompt");
-        std::fs::remove_file(&path).ok();
-        let server = tokio::spawn(mock_server(
-            path.clone(),
+        let (path, listener) = bind_socket("prompt");
+        let server = tokio::spawn(serve(
+            listener,
             vec![
                 Response::AuthMessage {
                     auth_message_type: AuthMessageType::Secret,
@@ -200,7 +200,6 @@ mod tests {
             ],
         ));
 
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         let mut client = Client::connect_to(&path).await.unwrap();
 
         let outcome = client.create_session("bob").await.unwrap();
@@ -218,17 +217,15 @@ mod tests {
 
     #[tokio::test]
     async fn auth_error_is_reported_as_such() {
-        let path = socket_path("autherr");
-        std::fs::remove_file(&path).ok();
-        let server = tokio::spawn(mock_server(
-            path.clone(),
+        let (path, listener) = bind_socket("autherr");
+        let server = tokio::spawn(serve(
+            listener,
             vec![Response::Error {
                 error_type: ErrorType::AuthError,
                 description: "denied".to_string(),
             }],
         ));
 
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         let mut client = Client::connect_to(&path).await.unwrap();
 
         let err = client.create_session("bob").await.unwrap_err();
@@ -242,9 +239,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connect_without_greetd_sock_env_fails_cleanly() {
-        std::env::remove_var("GREETD_SOCK");
-        let err = Client::connect().await.unwrap_err();
-        assert!(matches!(err, GreetdError::NoSocketEnv));
+    async fn connect_to_missing_socket_fails() {
+        let err = Client::connect_to("/no/such/breadgreet-test.sock")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, GreetdError::Connect(_)));
+    }
+
+    #[tokio::test]
+    async fn empty_password_is_sent_as_some_empty_string() {
+        let (path, listener) = bind_socket("empty-pw");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _ = Request::read_from(&mut stream).await;
+            Response::AuthMessage {
+                auth_message_type: AuthMessageType::Secret,
+                auth_message: "Password:".to_string(),
+            }
+            .write_to(&mut stream)
+            .await
+            .unwrap();
+            let req = Request::read_from(&mut stream).await.unwrap();
+            match req {
+                Request::PostAuthMessageResponse { response } => {
+                    assert_eq!(response, Some(String::new()));
+                }
+                other => panic!("expected PostAuthMessageResponse, got {other:?}"),
+            }
+            Response::Success.write_to(&mut stream).await.unwrap();
+        });
+
+        let mut client = Client::connect_to(&path).await.unwrap();
+        let outcome = client.create_session("bob").await.unwrap();
+        assert!(matches!(outcome, Outcome::Prompt(AuthPrompt::Secret(_))));
+        let outcome = client.respond(Some(String::new())).await.unwrap();
+        assert!(matches!(outcome, Outcome::Success));
+
+        server.await.unwrap();
+        std::fs::remove_file(&path).ok();
     }
 }

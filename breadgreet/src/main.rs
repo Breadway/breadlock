@@ -3,19 +3,15 @@ mod greetd;
 mod sessions;
 mod theme;
 
-use greetd::{AuthPrompt, Client, Outcome};
+use greetd::{AuthPrompt, Outcome};
+use gtk4::gdk::Key;
+use gtk4::glib::Propagation;
 use gtk4::prelude::*;
 use relm4::prelude::*;
 use tokio::sync::mpsc;
 
-/// Commands sent from the UI thread to the greetd actor task (see
-/// [`spawn_greetd_actor`]), which owns the single stateful connection to
-/// `$GREETD_SOCK` for the lifetime of one login attempt.
-enum GreetdCommand {
-    CreateSession(String),
-    Respond(Option<String>),
-    StartSession { cmd: Vec<String>, env: Vec<String> },
-}
+/// Extra zoom beyond plain cover-fit — matches breadlock's `KENBURNS_ZOOM`.
+const KENBURNS_ZOOM: f32 = 1.06;
 
 #[derive(Debug, Clone)]
 enum Stage {
@@ -27,6 +23,8 @@ enum Stage {
     /// A request is in flight — input is disabled so a second Enter can't
     /// race it.
     Working,
+    /// `StartSession` has been sent — Escape must not cancel.
+    Starting,
 }
 
 #[derive(Debug)]
@@ -39,10 +37,13 @@ enum AppInput {
     SessionStarted,
     /// Picker changed; `u32::MAX` (`INVALID_LIST_POSITION`) is ignored.
     SessionSelected(u32),
+    /// Escape — abort the in-progress PAM conversation.
+    Cancel,
 }
 
 struct App {
     clock_lbl: gtk4::Label,
+    date_lbl: gtk4::Label,
     status_lbl: gtk4::Label,
     entry: gtk4::Entry,
     stage: Stage,
@@ -50,7 +51,11 @@ struct App {
     sessions: Vec<sessions::Session>,
     selected: usize,
     clock_format: String,
-    cmd_tx: mpsc::UnboundedSender<GreetdCommand>,
+    date_format: String,
+    /// Last status line was a PAM Info/Error — keep it when the next
+    /// Secret/Visible prompt arrives.
+    pam_status_held: bool,
+    cmd_tx: mpsc::UnboundedSender<greetd::Command>,
 }
 
 #[relm4::component]
@@ -102,8 +107,26 @@ impl SimpleComponent for App {
         .and_then(|chosen| sessions.iter().position(|s| s.stem == chosen.stem))
         .unwrap_or(0);
 
+        if config.appearance.background.blur {
+            tracing::warn!(
+                "background.blur is not implemented yet (planned v2 feature, needs a wlr-screencopy \
+                 capture) — showing the configured background unblurred"
+            );
+        }
+
         let clock_lbl = gtk4::Label::new(None);
         clock_lbl.add_css_class("login-clock");
+
+        let date_lbl = gtk4::Label::new(None);
+        date_lbl.add_css_class("login-date");
+        if config.appearance.clock.date_format.is_empty() {
+            date_lbl.set_visible(false);
+            clock_lbl.set_margin_bottom(20);
+        } else {
+            clock_lbl.set_margin_bottom(4);
+            date_lbl.set_margin_bottom(16);
+            date_lbl.set_label(&current_time(&config.appearance.clock.date_format));
+        }
 
         let entry = gtk4::Entry::new();
         entry.add_css_class("login-entry");
@@ -116,6 +139,12 @@ impl SimpleComponent for App {
 
         let status_lbl = gtk4::Label::new(None);
         status_lbl.add_css_class("login-status");
+
+        if sessions.is_empty() {
+            entry.set_sensitive(false);
+            status_lbl.set_label("No session found — cannot log in");
+            status_lbl.add_css_class("error");
+        }
 
         let session_widget: gtk4::Widget = if sessions.is_empty() {
             let session_lbl = gtk4::Label::new(Some("No session found — cannot log in"));
@@ -170,7 +199,23 @@ impl SimpleComponent for App {
         widgets.overlay.add_overlay(&widgets.root_box);
 
         widgets.root_box.append(&clock_lbl);
+        widgets.root_box.append(&date_lbl);
         widgets.root_box.append(&card);
+
+        {
+            let tx = sender.input_sender().clone();
+            let key = gtk4::EventControllerKey::new();
+            key.set_propagation_phase(gtk4::PropagationPhase::Capture);
+            key.connect_key_pressed(move |_, keyval, _, _| {
+                if keyval == Key::Escape {
+                    let _ = tx.send(AppInput::Cancel);
+                    Propagation::Stop
+                } else {
+                    Propagation::Proceed
+                }
+            });
+            root.add_controller(key);
+        }
 
         // Wallpaper behind the card: cover-fit, Ken Burns pan when enabled
         // (driven by a frame-clock tick callback), plus an entrance fade+rise.
@@ -189,12 +234,13 @@ impl SimpleComponent for App {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         spawn_greetd_actor(cmd_rx, sender.clone());
 
-        theme::apply();
+        theme::apply(&config.appearance.font.family);
         bread_theme::gtk::bind_window_auto(&root);
         spawn_clock_ticker(sender.clone());
 
         let model = App {
             clock_lbl,
+            date_lbl,
             status_lbl,
             entry,
             stage: Stage::Username,
@@ -202,12 +248,16 @@ impl SimpleComponent for App {
             sessions,
             selected,
             clock_format: config.appearance.clock.format.clone(),
+            date_format: config.appearance.clock.date_format.clone(),
+            pam_status_held: false,
             cmd_tx,
         };
         model
             .clock_lbl
             .set_label(&current_time(&model.clock_format));
-        model.entry.grab_focus();
+        if !model.sessions.is_empty() {
+            model.entry.grab_focus();
+        }
 
         ComponentParts { model, widgets }
     }
@@ -216,24 +266,20 @@ impl SimpleComponent for App {
         match msg {
             AppInput::ClockTick => {
                 self.clock_lbl.set_label(&current_time(&self.clock_format));
+                if !self.date_format.is_empty() {
+                    self.date_lbl.set_label(&current_time(&self.date_format));
+                }
             }
             AppInput::Submit => self.handle_submit(),
             AppInput::Outcome(Outcome::Success) => self.start_session(),
             AppInput::Outcome(Outcome::Prompt(prompt)) => self.handle_prompt(prompt),
-            AppInput::Error(description) => {
-                self.status_lbl.set_label(&description);
-                self.status_lbl.add_css_class("error");
-                self.entry.set_text("");
-                self.entry.set_visibility(true);
-                self.entry.set_placeholder_text(Some("Username"));
-                self.entry.set_sensitive(true);
-                self.stage = Stage::Username;
-                self.username.clear();
-            }
+            AppInput::Error(description) => self.show_error(&description),
             AppInput::SessionStarted => {
-                // greetd now owns the VT switch to the started session —
-                // nothing left for the greeter to do.
+                // greetd waits for this process to exit before exec'ing the
+                // session (cage + gtkgreet/tuigreet all quit here).
                 self.status_lbl.set_label("Starting session…");
+                relm4::main_application().quit();
+                std::process::exit(0);
             }
             AppInput::SessionSelected(idx) => {
                 let idx = idx as usize;
@@ -241,19 +287,24 @@ impl SimpleComponent for App {
                     self.selected = idx;
                 }
             }
+            AppInput::Cancel => self.cancel_auth(),
         }
     }
 }
 
 impl App {
     fn handle_submit(&mut self) {
-        if matches!(self.stage, Stage::Working) {
+        if matches!(self.stage, Stage::Working | Stage::Starting) {
             return;
         }
         let text = self.entry.text().to_string();
 
         match &self.stage {
             Stage::Username => {
+                if self.sessions.is_empty() {
+                    self.show_error("No session found — cannot log in");
+                    return;
+                }
                 if text.is_empty() {
                     return;
                 }
@@ -261,61 +312,120 @@ impl App {
                 self.entry.set_text("");
                 self.entry.set_sensitive(false);
                 self.stage = Stage::Working;
-                let _ = self
-                    .cmd_tx
-                    .send(GreetdCommand::CreateSession(self.username.clone()));
+                self.status_lbl.set_label("");
+                self.status_lbl.remove_css_class("error");
+                self.pam_status_held = false;
+                self.dispatch(greetd::Command::CreateSession(self.username.clone()));
             }
             Stage::Prompt => {
                 self.entry.set_text("");
                 self.entry.set_sensitive(false);
                 self.stage = Stage::Working;
-                let answer = if text.is_empty() { None } else { Some(text) };
-                let _ = self.cmd_tx.send(GreetdCommand::Respond(answer));
+                self.dispatch(greetd::Command::Respond(prompt_answer(text)));
             }
-            Stage::Working => {}
+            Stage::Working | Stage::Starting => {}
         }
     }
 
     fn handle_prompt(&mut self, prompt: AuthPrompt) {
-        self.status_lbl.remove_css_class("error");
         match prompt {
-            AuthPrompt::Info(message) | AuthPrompt::Error(message) => {
-                // No answer needed — display and immediately continue the
-                // conversation with an empty response.
+            AuthPrompt::Info(message) => {
+                self.status_lbl.remove_css_class("error");
                 self.status_lbl.set_label(&message);
-                let _ = self.cmd_tx.send(GreetdCommand::Respond(None));
+                self.pam_status_held = true;
+                self.dispatch(greetd::Command::Respond(None));
             }
-            AuthPrompt::Visible(message) => {
+            AuthPrompt::Error(message) => {
+                self.status_lbl.add_css_class("error");
                 self.status_lbl.set_label(&message);
-                self.entry.set_visibility(true);
-                self.entry.set_placeholder_text(Some(&message));
-                self.entry.set_sensitive(true);
-                self.entry.grab_focus();
-                self.stage = Stage::Prompt;
+                self.pam_status_held = true;
+                self.dispatch(greetd::Command::Respond(None));
             }
-            AuthPrompt::Secret(message) => {
-                self.status_lbl.set_label(&message);
-                self.entry.set_visibility(false);
-                self.entry.set_placeholder_text(Some(&message));
-                self.entry.set_sensitive(true);
-                self.entry.grab_focus();
-                self.stage = Stage::Prompt;
+            AuthPrompt::Visible(message) => self.show_auth_entry(&message, true),
+            AuthPrompt::Secret(message) => self.show_auth_entry(&message, false),
+        }
+    }
+
+    fn show_auth_entry(&mut self, message: &str, visible: bool) {
+        if !self.pam_status_held {
+            self.status_lbl.remove_css_class("error");
+            self.status_lbl.set_label(message);
+        }
+        self.pam_status_held = false;
+        self.entry.set_visibility(visible);
+        self.entry.set_placeholder_text(Some(message));
+        self.entry.set_sensitive(true);
+        self.entry.grab_focus();
+        self.stage = Stage::Prompt;
+    }
+
+    fn start_session(&mut self) {
+        let (cmd, env) = match self.sessions.get(self.selected) {
+            Some(session) => (session.exec.clone(), session.start_env()),
+            None => {
+                self.dispatch(greetd::Command::CancelSession);
+                self.show_error("No session available to start");
+                return;
+            }
+        };
+        self.status_lbl.remove_css_class("error");
+        self.status_lbl.set_label("Starting session…");
+        self.entry.set_sensitive(false);
+        self.stage = Stage::Starting;
+        self.dispatch(greetd::Command::StartSession { cmd, env });
+    }
+
+    fn cancel_auth(&mut self) {
+        match self.stage {
+            Stage::Starting => {}
+            Stage::Username => {
+                self.entry.set_text("");
+            }
+            Stage::Prompt | Stage::Working => {
+                self.status_lbl.set_label("");
+                self.status_lbl.remove_css_class("error");
+                self.reset_to_username();
+                if self.cmd_tx.send(greetd::Command::CancelSession).is_err() {
+                    self.show_error("Cannot reach greetd");
+                }
             }
         }
     }
 
-    fn start_session(&mut self) {
-        let Some(session) = self.sessions.get(self.selected) else {
-            self.status_lbl.set_label("No session available to start");
-            self.status_lbl.add_css_class("error");
-            return;
-        };
-        self.status_lbl.set_label("Starting session…");
-        let _ = self.cmd_tx.send(GreetdCommand::StartSession {
-            cmd: session.exec.clone(),
-            env: Vec::new(),
-        });
+    fn dispatch(&mut self, cmd: greetd::Command) {
+        if self.cmd_tx.send(cmd).is_err() {
+            self.show_error("Cannot reach greetd");
+        }
     }
+
+    fn show_error(&mut self, description: &str) {
+        self.status_lbl.set_label(description);
+        if description.is_empty() {
+            self.status_lbl.remove_css_class("error");
+        } else {
+            self.status_lbl.add_css_class("error");
+        }
+        self.reset_to_username();
+    }
+
+    fn reset_to_username(&mut self) {
+        self.entry.set_text("");
+        self.entry.set_visibility(true);
+        self.entry.set_placeholder_text(Some("Username"));
+        self.entry.set_sensitive(!self.sessions.is_empty());
+        self.stage = Stage::Username;
+        self.username.clear();
+        self.pam_status_held = false;
+        if !self.sessions.is_empty() {
+            self.entry.grab_focus();
+        }
+    }
+}
+
+/// Secret/Visible answers are always `Some`, including the empty string.
+/// greetd/PAM treat `None` as a conversation cancel.
+fn prompt_answer(text: String) -> Option<String> {
+    Some(text)
 }
 
 /// Paints the configured wallpaper full-screen behind the login card. The
@@ -357,7 +467,11 @@ fn setup_wallpaper(
         }
         // Cover scale, then the Ken Burns oversize (leaves room to pan).
         let cover = (w / iw).max(h / ih);
-        let scale = if ken_burns { cover * 1.08 } else { cover };
+        let scale = if ken_burns {
+            cover * KENBURNS_ZOOM
+        } else {
+            cover
+        };
         let dw = iw * scale;
         let dh = ih * scale;
         // Pan within the oversize margin (0..dw-w, 0..dh-h).
@@ -391,9 +505,12 @@ fn setup_wallpaper(
 /// over ~600ms (ease-out), matching the lock screen's appear motion.
 fn setup_entrance(window: &gtk4::ApplicationWindow, root_box: &gtk4::Box) {
     let root_box = root_box.clone();
-    let start = std::time::Instant::now();
     const DURATION_MS: f32 = 600.0;
     const RISE_PX: f32 = 24.0;
+    // First mapped frame must not be fully opaque — start hidden, then tick.
+    root_box.set_opacity(0.0);
+    root_box.set_margin_top(RISE_PX as i32);
+    let start = std::time::Instant::now();
     window.add_tick_callback(move |_w, _frame_clock| {
         let t = (start.elapsed().as_secs_f32() * 1000.0) / DURATION_MS;
         let t = t.clamp(0.0, 1.0);
@@ -409,54 +526,35 @@ fn setup_entrance(window: &gtk4::ApplicationWindow, root_box: &gtk4::Box) {
     });
 }
 
-/// Owns the single stateful connection to `$GREETD_SOCK` for one login
-/// attempt and translates the UI's [`GreetdCommand`]s into greetd IPC
-/// round-trips, forwarding each outcome back as an [`AppInput`].
+/// Owns the single stateful connection to `$GREETD_SOCK` and translates the
+/// UI's [`greetd::Command`]s into greetd IPC round-trips, forwarding each
+/// outcome back as an [`AppInput`].
 fn spawn_greetd_actor(
-    mut cmd_rx: mpsc::UnboundedReceiver<GreetdCommand>,
+    cmd_rx: mpsc::UnboundedReceiver<greetd::Command>,
     sender: ComponentSender<App>,
 ) {
+    let input = sender.input_sender().clone();
     relm4::spawn(async move {
-        let mut client = match Client::connect().await {
-            Ok(client) => client,
-            Err(err) => {
-                sender.input(AppInput::Error(format!("Cannot reach greetd: {err}")));
-                return;
-            }
-        };
-
-        while let Some(cmd) = cmd_rx.recv().await {
-            let result = match cmd {
-                GreetdCommand::CreateSession(username) => client.create_session(&username).await,
-                GreetdCommand::Respond(answer) => client.respond(answer).await,
-                GreetdCommand::StartSession { cmd, env } => {
-                    match client.start_session(cmd, env).await {
-                        Ok(()) => {
-                            sender.input(AppInput::SessionStarted);
-                            continue;
-                        }
-                        Err(err) => Err(err),
-                    }
-                }
+        greetd::run_actor(cmd_rx, move |event| {
+            let msg = match event {
+                greetd::Event::Outcome(outcome) => AppInput::Outcome(outcome),
+                greetd::Event::Error(description) => AppInput::Error(description),
+                greetd::Event::SessionStarted => AppInput::SessionStarted,
             };
-
-            match result {
-                Ok(outcome) => sender.input(AppInput::Outcome(outcome)),
-                Err(err) => {
-                    tracing::warn!(%err, "greetd reported an error");
-                    client.cancel_session().await;
-                    sender.input(AppInput::Error(err.to_string()));
-                }
-            }
-        }
+            let _ = input.send(msg);
+        })
+        .await;
     });
 }
 
 fn spawn_clock_ticker(sender: ComponentSender<App>) {
+    let tx = sender.input_sender().clone();
     relm4::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            sender.input(AppInput::ClockTick);
+            if tx.send(AppInput::ClockTick).is_err() {
+                break;
+            }
         }
     });
 }
@@ -472,4 +570,15 @@ fn main() {
 
     let app = RelmApp::new("sh.breadway.breadgreet");
     app.run::<App>(());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_password_is_some_empty_string() {
+        assert_eq!(prompt_answer(String::new()), Some(String::new()));
+        assert_eq!(prompt_answer("hunter2".into()), Some("hunter2".into()));
+    }
 }
