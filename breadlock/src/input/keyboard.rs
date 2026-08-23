@@ -8,7 +8,7 @@ use wayland_client::{Connection, QueueHandle};
 use zeroize::Zeroize;
 
 use crate::auth;
-use crate::state::{AppState, AuthState};
+use crate::state::{AppState, AuthState, PASSWORD_CAP};
 
 impl SeatHandler for AppState {
     fn seat_state(&mut self) -> &mut SeatState {
@@ -25,48 +25,40 @@ impl SeatHandler for AppState {
         capability: Capability,
     ) {
         if capability == Capability::Keyboard && self.keyboard.is_none() {
-            // Plain `get_keyboard` never populates SCTK's internal repeat
-            // timer, so `KeyboardHandler::repeat_key` below only ever fires
-            // for compositors that implement server-side key repeat
-            // (wl_keyboard >= v10's "repeated" pseudo key-state) themselves —
-            // Hyprland does not reliably do this. `get_keyboard_with_repeat`
-            // registers SCTK's own client-side repeat timer driven by the
-            // compositor's `repeat_info` (delay/rate); if a compositor *does*
-            // do server-side repeat it advertises `rate = 0`, which this
-            // timer already treats as disabled, so the two mechanisms can't
-            // double-fire.
-            let repeat_qh = qh.clone();
-            let loop_handle = self.loop_handle.clone();
-            match self.seat_state.get_keyboard_with_repeat(
-                qh,
-                &seat,
-                None,
-                loop_handle,
-                Box::new(move |state: &mut AppState, _keyboard, event| {
-                    state.handle_key(&repeat_qh, event);
-                }),
-            ) {
-                Ok(keyboard) => self.keyboard = Some(keyboard),
-                Err(err) => tracing::error!(%err, "failed to bind keyboard"),
-            }
+            self.try_bind_keyboard(qh, &seat);
         }
     }
 
     fn remove_capability(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _seat: wl_seat::WlSeat,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
-        if capability == Capability::Keyboard {
-            if let Some(keyboard) = self.keyboard.take() {
-                keyboard.release();
-            }
+        if capability != Capability::Keyboard {
+            return;
         }
+        // Only release if THIS seat owns the bound keyboard.
+        if self.keyboard_seat.as_ref() != Some(&seat) {
+            return;
+        }
+        if let Some(keyboard) = self.keyboard.take() {
+            keyboard.release();
+        }
+        self.keyboard_seat = None;
+        self.bind_keyboard_from_available_seats(qh);
     }
 
-    fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: wl_seat::WlSeat) {
+    fn remove_seat(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
+        if self.keyboard_seat.as_ref() != Some(&seat) {
+            return;
+        }
+        if let Some(keyboard) = self.keyboard.take() {
+            keyboard.release();
+        }
+        self.keyboard_seat = None;
+        self.bind_keyboard_from_available_seats(qh);
     }
 }
 
@@ -86,11 +78,16 @@ impl KeyboardHandler for AppState {
     fn leave(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _keyboard: &wl_keyboard::WlKeyboard,
         _surface: &wl_surface::WlSurface,
         _serial: u32,
     ) {
+        // Tab-held then focus leave would otherwise leave plaintext on screen.
+        if self.reveal_held {
+            self.reveal_held = false;
+            self.redraw_all(qh);
+        }
     }
 
     fn press_key(
@@ -154,11 +151,75 @@ impl KeyboardHandler for AppState {
 }
 
 impl AppState {
+    fn try_bind_keyboard(&mut self, qh: &QueueHandle<Self>, seat: &wl_seat::WlSeat) {
+        if self.keyboard.is_some() {
+            return;
+        }
+        // Plain `get_keyboard` never populates SCTK's internal repeat
+        // timer, so `KeyboardHandler::repeat_key` below only ever fires
+        // for compositors that implement server-side key repeat
+        // (wl_keyboard >= v10's "repeated" pseudo key-state) themselves —
+        // Hyprland does not reliably do this. `get_keyboard_with_repeat`
+        // registers SCTK's own client-side repeat timer driven by the
+        // compositor's `repeat_info` (delay/rate); if a compositor *does*
+        // do server-side repeat it advertises `rate = 0`, which this
+        // timer already treats as disabled, so the two mechanisms can't
+        // double-fire.
+        let repeat_qh = qh.clone();
+        let loop_handle = self.loop_handle.clone();
+        match self.seat_state.get_keyboard_with_repeat(
+            qh,
+            seat,
+            None,
+            loop_handle,
+            Box::new(move |state: &mut AppState, _keyboard, event| {
+                state.handle_key(&repeat_qh, event);
+            }),
+        ) {
+            Ok(keyboard) => {
+                self.keyboard = Some(keyboard);
+                self.keyboard_seat = Some(seat.clone());
+            }
+            Err(err) => tracing::error!(%err, "failed to bind keyboard"),
+        }
+    }
+
+    fn bind_keyboard_from_available_seats(&mut self, qh: &QueueHandle<Self>) {
+        if self.keyboard.is_some() {
+            return;
+        }
+        let seats: Vec<wl_seat::WlSeat> = self.seat_state.seats().collect();
+        for seat in seats {
+            if self.keyboard.is_some() {
+                return;
+            }
+            if self
+                .seat_state
+                .info(&seat)
+                .is_some_and(|info| info.has_keyboard)
+            {
+                self.try_bind_keyboard(qh, &seat);
+            }
+        }
+    }
+
     fn handle_key(&mut self, qh: &QueueHandle<Self>, event: KeyEvent) {
-        // Ignore all input while a PAM check is in flight so a fast second
-        // Enter can't race the first attempt, and while the unlock fade is
-        // playing (auth already succeeded; surfaces stay up until it ends).
-        if self.auth_state == AuthState::Checking || self.unlocking.is_some() {
+        // Unlock fade: auth already succeeded; surfaces stay up until it ends.
+        if self.unlocking.is_some() {
+            return;
+        }
+
+        // Escape during Checking cancels the wait (generation bump so a
+        // late PAM result cannot unlock). libpam itself is not aborted.
+        if self.auth_state == AuthState::Checking {
+            if event.keysym == Keysym::Escape {
+                self.auth_generation = self.auth_generation.wrapping_add(1);
+                self.auth_state = AuthState::Idle;
+                self.checking_started = None;
+                self.password_display_len = 0;
+                self.last_activity = Instant::now();
+                self.redraw_all(qh);
+            }
             return;
         }
 
@@ -198,6 +259,7 @@ impl AppState {
             }
             Keysym::Escape => {
                 self.password.zeroize();
+                self.password_display_len = 0;
                 self.clear_failed_state();
             }
             _ => {
@@ -205,14 +267,21 @@ impl AppState {
                     // Return/BackSpace/Escape are handled above by keysym;
                     // this guards against a compositor also sending utf8 for
                     // those (defensive — filters any stray control chars).
+                    let mut grew = false;
                     for ch in text.chars().filter(|c| !c.is_control()) {
-                        self.password.push(ch);
+                        if try_push_password(&mut self.password, ch) {
+                            grew = true;
+                        } else {
+                            break;
+                        }
                     }
-                    // Only keystrokes that *grew* the password re-prime the
-                    // newest-dot pop-in and the caret's solid phase (see the
-                    // `last_keystroke` field doc in state.rs).
-                    self.last_keystroke = Some(Instant::now());
-                    self.clear_failed_state();
+                    if grew {
+                        // Only keystrokes that *grew* the password re-prime the
+                        // newest-dot pop-in and the caret's solid phase (see the
+                        // `last_keystroke` field doc in state.rs).
+                        self.last_keystroke = Some(Instant::now());
+                        self.clear_failed_state();
+                    }
                 }
             }
         }
@@ -221,11 +290,16 @@ impl AppState {
     }
 
     fn clear_failed_state(&mut self) {
-        if matches!(self.auth_state, AuthState::Failed | AuthState::ConfigError) {
+        if matches!(
+            self.auth_state,
+            AuthState::Failed | AuthState::AccountInvalid | AuthState::ConfigError
+        ) {
             self.auth_state = AuthState::Idle;
             // Drop the red-pill tint and shake offsets; `failed_at` is also
-            // cleared so `schedule_clear_failed`'s timer is a no-op.
+            // cleared so `schedule_clear_failed`'s timer is a no-op unless
+            // its generation still matches a later fail.
             self.failed_at = None;
+            self.password_display_len = 0;
         }
     }
 
@@ -233,7 +307,14 @@ impl AppState {
         if self.password.is_empty() {
             return;
         }
+        if self.username.is_empty() {
+            self.enter_fail(AuthState::ConfigError);
+            return;
+        }
+        self.password_display_len = password_char_count(&self.password);
         self.auth_state = AuthState::Checking;
+        self.checking_started = Some(Instant::now());
+        self.auth_generation = self.auth_generation.wrapping_add(1);
         // Hand ownership of the buffer to the auth thread; re-reserve
         // capacity up front so the next password typed doesn't reallocate
         // (see the `password` field doc in state.rs). The taken buffer is
@@ -241,8 +322,61 @@ impl AppState {
         // check (`auth::spawn_check`/`pam::check`).
         let password = std::mem::replace(
             &mut self.password,
-            zeroize::Zeroizing::new(String::with_capacity(128)),
+            zeroize::Zeroizing::new(String::with_capacity(PASSWORD_CAP)),
         );
-        auth::spawn_check(self.username.clone(), password, self.auth_tx.clone());
+        auth::spawn_check(
+            self.username.clone(),
+            password,
+            self.auth_generation,
+            self.auth_tx.clone(),
+        );
+    }
+}
+
+/// Push `ch` only if it fits in the already-reserved capacity (no realloc,
+/// so an old unzeroized heap buffer is never leaked).
+pub(crate) fn try_push_password(password: &mut String, ch: char) -> bool {
+    let extra = ch.len_utf8();
+    if password.len().saturating_add(extra) > password.capacity() {
+        return false;
+    }
+    password.push(ch);
+    true
+}
+
+/// Character count for the password pill — never `String::len()` (UTF-8).
+pub(crate) fn password_char_count(password: &str) -> usize {
+    password.chars().count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_cap_ignores_push_that_would_realloc() {
+        let mut s = String::with_capacity(8);
+        assert!(try_push_password(&mut s, 'a'));
+        while try_push_password(&mut s, 'x') {}
+        let cap = s.capacity();
+        let len = s.len();
+        assert!(!try_push_password(&mut s, 'y'));
+        assert_eq!(s.len(), len);
+        assert_eq!(s.capacity(), cap);
+    }
+
+    #[test]
+    fn password_char_count_is_not_byte_len() {
+        let mut s = String::with_capacity(16);
+        assert!(try_push_password(&mut s, 'é'));
+        assert_eq!(s.len(), 2);
+        assert_eq!(password_char_count(&s), 1);
+    }
+
+    #[test]
+    fn reserved_capacity_is_256() {
+        assert_eq!(PASSWORD_CAP, 256);
+        let s = String::with_capacity(PASSWORD_CAP);
+        assert!(s.capacity() >= PASSWORD_CAP);
     }
 }

@@ -31,12 +31,18 @@ pub enum Background {
 /// A wallpaper with a lazily-built, output-sized copy. The first `paint` for
 /// a given output size does one downscale; every frame after that blits the
 /// cached copy with at most a translation (the Ken Burns pan).
+/// Cap on cached scaled copies — enough for a typical multi-monitor setup
+/// without unbounded growth if the compositor sends many sizes.
+const SCALED_CACHE_SLOTS: usize = 4;
+
 pub struct ImageBg {
     /// Original wallpaper. Kept so a different output size (hotplug) simply
     /// rebuilds the cache rather than needing the source reloaded.
     source: Pixmap,
     ken_burns: bool,
-    cache: RefCell<Option<ScaledBg>>,
+    /// Last scaled copies **per target size**. A single slot thrashed every
+    /// frame under `redraw_all` with two monitors of different sizes.
+    cache: RefCell<Vec<ScaledBg>>,
 }
 
 struct ScaledBg {
@@ -70,8 +76,8 @@ fn blit_translate(target: &mut Pixmap, src: &Pixmap, dx: f32, dy: f32, bilinear:
     let th = target.height() as usize;
     let sw = src.width() as usize;
     let sh = src.height() as usize;
-    let sx = (-dx).clamp(0.0, (sw - tw).max(0) as f32);
-    let sy = (-dy).clamp(0.0, (sh - th).max(0) as f32);
+    let sx = (-dx).clamp(0.0, sw.saturating_sub(tw) as f32);
+    let sy = (-dy).clamp(0.0, sh.saturating_sub(th) as f32);
 
     let fx = (sx.fract() * 65536.0) as u32 & 0xFFFF;
     let fy = (sy.fract() * 65536.0) as u32 & 0xFFFF;
@@ -105,6 +111,7 @@ fn blit_translate(target: &mut Pixmap, src: &Pixmap, dx: f32, dy: f32, bilinear:
     // one store instead of four — the loop is latency-bound). Each byte's
     // products stay well under 2^32, so lanes never interfere.
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     unsafe fn lerp4(
         sdata: &[u8],
         i00: usize,
@@ -145,10 +152,10 @@ fn blit_translate(target: &mut Pixmap, src: &Pixmap, dx: f32, dy: f32, bilinear:
         let mut out = 0u32;
         for c in 0..4 {
             let shift = c * 8;
-            let av = ((a >> shift) & 0xFF) as u32;
-            let bv = ((b >> shift) & 0xFF) as u32;
-            let dv = ((d >> shift) & 0xFF) as u32;
-            let ev = ((e >> shift) & 0xFF) as u32;
+            let av = (a >> shift) & 0xFF;
+            let bv = (b >> shift) & 0xFF;
+            let dv = (d >> shift) & 0xFF;
+            let ev = (e >> shift) & 0xFF;
             let top = (av * wx_inv + bv * wx) >> 16;
             let bot = (dv * wx_inv + ev * wx) >> 16;
             out |= ((top * wy_inv + bot * wy) >> 16) << shift;
@@ -227,7 +234,7 @@ impl Background {
                     Ok(pixmap) => Background::Image(ImageBg {
                         source: pixmap,
                         ken_burns: cfg.ken_burns,
-                        cache: RefCell::new(None),
+                        cache: RefCell::new(Vec::new()),
                     }),
                     Err(err) => {
                         tracing::warn!(path = %cfg.path, %err, "failed to load background image (PNG only in v1), falling back to palette color");
@@ -268,11 +275,18 @@ impl Background {
                     return;
                 }
                 let mut cache = bg.cache.borrow_mut();
-                let stale = cache
-                    .as_ref()
-                    .map(|c| c.target_w != target.width() || c.target_h != target.height())
-                    .unwrap_or(true);
-                if stale {
+                let tw_px = target.width();
+                let th_px = target.height();
+                let hit = cache
+                    .iter()
+                    .position(|c| c.target_w == tw_px && c.target_h == th_px);
+                if let Some(i) = hit {
+                    // LRU: most-recently used at the end.
+                    if i + 1 != cache.len() {
+                        let entry = cache.remove(i);
+                        cache.push(entry);
+                    }
+                } else {
                     let cover = (tw / sw).max(th / sh);
                     let scale = cover * if bg.ken_burns { KENBURNS_ZOOM } else { 1.0 };
                     let scaled_w = (sw * scale).round().max(1.0) as u32;
@@ -281,7 +295,6 @@ impl Background {
                         tracing::error!(
                             "failed to allocate {scaled_w}x{scaled_h} scaled wallpaper — falling back to a palette-color background"
                         );
-                        *cache = None;
                         drop(cache);
                         target.fill(breadlock_ui::theme::tiny_skia_color(
                             &breadlock_ui::theme::Palette::default().background,
@@ -292,8 +305,10 @@ impl Background {
                     // The one real downscale in the pipeline: bilinear so the
                     // cached layer is smooth (per-frame draws are pure copies
                     // and don't re-filter).
-                    let mut paint = PixmapPaint::default();
-                    paint.quality = tiny_skia::FilterQuality::Bilinear;
+                    let paint = PixmapPaint {
+                        quality: tiny_skia::FilterQuality::Bilinear,
+                        ..Default::default()
+                    };
                     pixmap.draw_pixmap(
                         0,
                         0,
@@ -302,15 +317,18 @@ impl Background {
                         Transform::from_scale(scale, scale),
                         None,
                     );
-                    *cache = Some(ScaledBg {
+                    if cache.len() >= SCALED_CACHE_SLOTS {
+                        cache.remove(0);
+                    }
+                    cache.push(ScaledBg {
                         pixmap,
                         pan_x: scaled_w as f32 - tw,
                         pan_y: scaled_h as f32 - th,
-                        target_w: target.width(),
-                        target_h: target.height(),
+                        target_w: tw_px,
+                        target_h: th_px,
                     });
                 }
-                let scaled = cache.as_ref().expect("cache populated above");
+                let scaled = cache.last().expect("cache populated above");
                 target.fill(tiny_skia::Color::BLACK);
                 let (tx, ty) = if bg.ken_burns {
                     let phase = t_secs * TAU / KENBURNS_PERIOD_S;
@@ -400,7 +418,7 @@ mod tests {
         let bg = Background::Image(ImageBg {
             source,
             ken_burns: true,
-            cache: RefCell::new(None),
+            cache: RefCell::new(Vec::new()),
         });
         let mut target = Pixmap::new(60, 30).unwrap();
         for i in 0..90 {
@@ -426,7 +444,7 @@ mod tests {
         // pixel averages src[x] and src[x + 1].
         blit_translate(&mut dst, &src, -0.5, 0.0, true);
         let px = dst.pixels();
-        assert_eq!(px[0].red(), ((0 + 32) / 2) as u8, "0.5px shift averages neighbors");
+        assert_eq!(px[0].red(), 16, "0.5px shift averages neighbors");
         assert_eq!(px[1].red(), ((32 + 64) / 2) as u8);
         assert_eq!(px[5].red(), ((160 + 192) / 2) as u8);
     }
@@ -439,10 +457,40 @@ mod tests {
         let bg = Background::Image(ImageBg {
             source,
             ken_burns: false,
-            cache: RefCell::new(None),
+            cache: RefCell::new(Vec::new()),
         });
         let mut target = Pixmap::new(60, 30).unwrap();
         bg.paint(&mut target, 0.0, true);
         assert!(target.pixels().iter().all(|p| p.red() == 200 && p.green() == 30));
+    }
+
+    #[test]
+    fn scaled_cache_keeps_a_slot_per_target_size() {
+        // Two output sizes (two monitors) must not thrash a single slot.
+        let mut source = Pixmap::new(80, 40).unwrap();
+        source.fill(tiny_skia::Color::from_rgba8(200, 30, 30, 255));
+        let image = ImageBg {
+            source,
+            ken_burns: false,
+            cache: RefCell::new(Vec::new()),
+        };
+        let bg = Background::Image(image);
+        let mut a = Pixmap::new(60, 30).unwrap();
+        let mut b = Pixmap::new(40, 20).unwrap();
+        bg.paint(&mut a, 0.0, false);
+        bg.paint(&mut b, 0.0, false);
+        bg.paint(&mut a, 0.0, false);
+        let Background::Image(image) = &bg else {
+            panic!("expected image background");
+        };
+        let cache = image.cache.borrow();
+        assert_eq!(
+            cache.len(),
+            2,
+            "two target sizes should occupy two slots, got {} slots",
+            cache.len()
+        );
+        assert!(cache.iter().any(|c| c.target_w == 60 && c.target_h == 30));
+        assert!(cache.iter().any(|c| c.target_w == 40 && c.target_h == 20));
     }
 }

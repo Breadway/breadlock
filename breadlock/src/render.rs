@@ -12,7 +12,7 @@
 //! little-endian machines. [`blit_to_shm`] does the swizzle.
 
 use crate::background::Background;
-use breadlock_ui::painter::{rounded_rect, tokens, TextRenderer};
+use breadlock_ui::painter::{rounded_rect, tokens, TextRenderer, Weight};
 use breadlock_ui::theme::tiny_skia_color;
 use std::f32::consts::PI;
 use std::time::Instant;
@@ -86,7 +86,9 @@ fn dim_rows(pixmap: &mut Pixmap, veil_alpha: f32) {
             data[i] = (data[i] as f32 * k) as u8;
             data[i + 1] = (data[i + 1] as f32 * k) as u8;
             data[i + 2] = (data[i + 2] as f32 * k) as u8;
-            data[i + 3] = (data[i + 3] as f32 * k) as u8;
+            // Keep alpha: the GPU veil shader writes A=1, and scaling A here
+            // made the software path translucent against a compositor that
+            // expected an opaque lock surface.
         }
     }
 }
@@ -164,6 +166,9 @@ pub struct FrameInputs<'a> {
     /// Status-line slide-in progress (0..1, 1 settled).
     pub status_t: f32,
     pub status_text: Option<&'a str>,
+    /// Now-playing / battery line under the clock (D-Bus status). Empty
+    /// string hides it.
+    pub info_text: &'a str,
     /// Raw 0..1 lock-appear progress (pre-ease). 1 is rest pose.
     pub appear_t: f32,
     /// Raw 0..1 unlock-fade progress (pre-ease). 0 when not unlocking.
@@ -225,11 +230,23 @@ fn staggered_t(appear_t: f32, delay_ms: u64) -> f32 {
     ((appear_t * APPEAR_MS as f32 - delay_ms as f32) / window).clamp(0.0, 1.0)
 }
 
+/// Maps raw unlock progress so the first [`FLASH_FRAC`] stays at rest pose
+/// (green flash on top of a fully-opaque chrome) and only the remainder
+/// eases the fade/drift.
+fn unlock_fade_t(unlock_t: f32) -> f32 {
+    if unlock_t <= FLASH_FRAC {
+        0.0
+    } else {
+        ((unlock_t - FLASH_FRAC) / (1.0 - FLASH_FRAC)).clamp(0.0, 1.0)
+    }
+}
+
 /// Overlay alpha and y-offset (positive is down) from raw 0..1 progress —
 /// used for the full-screen dim veil, which fades with the whole chrome.
+/// Unlock fade starts *after* the success flash (see [`unlock_fade_t`]).
 pub fn overlay_motion(appear_t: f32, unlock_t: f32) -> (f32, f32) {
     let appear = ease_out_cubic(appear_t);
-    let unlock = ease_out_cubic(unlock_t);
+    let unlock = ease_out_cubic(unlock_fade_t(unlock_t));
     let alpha = (appear * (1.0 - unlock)).clamp(0.0, 1.0);
     let y = APPEAR_SLIDE_PX * (1.0 - appear) - UNLOCK_DRIFT_PX * unlock;
     (alpha, y)
@@ -275,12 +292,27 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 /// Bounding rect of the lock-screen chrome (clock, date, pill, status) in
 /// surface pixels — the GPU path uses it to know which region of the chrome
 /// texture was drawn (and therefore needs uploading each frame).
-#[derive(Debug, Clone, Copy, Default)]
+///
+/// Empty is `(+∞, +∞, −∞, −∞)` so [`ChromeRect::expand`] can seed from the
+/// first real box. `(0,0,0,0)` as a start made `0.min(clock_x)` stick at the
+/// origin and the GPU uploaded a huge/wrong dirty rect.
+#[derive(Debug, Clone, Copy)]
 pub struct ChromeRect {
     pub x0: f32,
     pub y0: f32,
     pub x1: f32,
     pub y1: f32,
+}
+
+impl Default for ChromeRect {
+    fn default() -> Self {
+        Self {
+            x0: f32::INFINITY,
+            y0: f32::INFINITY,
+            x1: f32::NEG_INFINITY,
+            y1: f32::NEG_INFINITY,
+        }
+    }
 }
 
 impl ChromeRect {
@@ -289,6 +321,11 @@ impl ChromeRect {
         self.y0 = self.y0.min(y0);
         self.x1 = self.x1.max(x1);
         self.y1 = self.y1.max(y1);
+    }
+
+    #[allow(dead_code)]
+    fn is_empty(&self) -> bool {
+        self.x1 <= self.x0 || self.y1 <= self.y0
     }
 }
 
@@ -302,8 +339,9 @@ pub fn compose(text: &mut TextRenderer, inputs: &FrameInputs) -> Option<Pixmap> 
 
 /// Composes only the chrome (clock/date/pill/status) into a transparent
 /// `pixmap`, returning the bounding rect of everything drawn. The background
-/// and veil are the GPU's job in the accelerated path; colors are still
-/// pre-faded by the veil alpha so the software and GPU paths match.
+/// and veil are the GPU's job in the accelerated path; each element applies
+/// its appear/unlock alpha once (the veil lives on the wallpaper, not baked
+/// into chrome colors).
 pub fn compose_chrome(
     pixmap: &mut Pixmap,
     text: &mut TextRenderer,
@@ -319,7 +357,7 @@ pub fn compose_chrome(
 /// background/veil are skipped (chrome-only) and each drawn element's box is
 /// recorded.
 fn compose_impl(
-    mut pixmap: &mut Pixmap,
+    pixmap: &mut Pixmap,
     text: &mut TextRenderer,
     inputs: &FrameInputs,
     mut rects: Option<&mut ChromeRect>,
@@ -330,27 +368,28 @@ fn compose_impl(
             .paint(pixmap, inputs.t_secs, inputs.smooth_pan);
     }
 
-    // Overall chrome fade: appear eased in, unlock eased out. The unlock
-    // `fade` multiplies every element below. The dim veil deepens further
-    // once the idle auto-dim kicks in — chrome alpha stays at the base veil
-    // (0..1) while only the background dim scales past it.
-    let unlock = ease_out_cubic(inputs.unlock_t);
+    // Overall chrome fade: appear eased in, unlock eased out *after* the
+    // success flash. Skipping when `base_veil == 0` at appear t=0 flashed
+    // undimmed wallpaper (and left the GPU chrome rect empty); only skip
+    // once the unlock has fully finished.
+    if inputs.unlock_t >= 1.0 {
+        return;
+    }
+    let unlock = ease_out_cubic(unlock_fade_t(inputs.unlock_t));
     let fade = 1.0 - unlock;
     let (base_veil, _) = overlay_motion(inputs.appear_t, inputs.unlock_t);
     let bg_veil = veil_alpha(inputs.appear_t, inputs.unlock_t, inputs.idle_dim);
-    if base_veil <= 0.0 {
-        return;
-    }
 
     let (w, h) = (inputs.width as f32, inputs.height as f32);
-    let surface_color = faded(tiny_skia_color(&inputs.palette.color0), base_veil);
-    let accent_color = faded(tiny_skia_color(&inputs.palette.color4), base_veil);
-    let green_color = faded(tiny_skia_color(&inputs.palette.color2), base_veil);
-    let on_surface = faded(
-        tiny_skia_color(breadlock_ui::theme::ink_on(&inputs.palette.color0)),
-        base_veil,
-    );
-    let red_color = faded(tiny_skia_color(&inputs.palette.color1), base_veil);
+    // Palette colors are *not* pre-multiplied by the veil: each element
+    // applies its appear/unlock alpha once via `faded(..., elem_alpha)`.
+    // Pre-fading here and again with `pill_alpha` made the pill/status
+    // fainter than the clock (which only faded once).
+    let surface_color = tiny_skia_color(&inputs.palette.color0);
+    let accent_color = tiny_skia_color(&inputs.palette.color4);
+    let green_color = tiny_skia_color(&inputs.palette.color2);
+    let on_surface = tiny_skia_color(breadlock_ui::theme::ink_on(&inputs.palette.color0));
+    let red_color = tiny_skia_color(&inputs.palette.color1);
 
     // Translucent veil over the (static) wallpaper — a vertical gradient
     // (deeper at the top) that fades with the whole chrome. Applied in place
@@ -389,71 +428,121 @@ fn compose_impl(
     if let Some(r) = rects.as_deref_mut() {
         let old_w = inputs
             .clock_old
-            .map(|(t, _)| text.measure_line(t, inputs.font_family, clock_size))
+            .map(|(t, _)| text.measure_line_weighted(t, inputs.font_family, clock_size, Weight::BOLD))
             .unwrap_or(0.0);
-        let new_w = text.measure_line(inputs.clock_text, inputs.font_family, clock_size);
+        let new_w = text.measure_line_weighted(
+            inputs.clock_text,
+            inputs.font_family,
+            clock_size,
+            Weight::BOLD,
+        );
         let cw = old_w.max(new_w);
         r.expand((w - cw) / 2.0, clock_y, (w + cw) / 2.0, clock_y + clock_size);
     }
     match inputs.clock_old {
         Some((old, t)) => {
             let t = t.clamp(0.0, 1.0);
-            let old_w = text.measure_line(old, inputs.font_family, clock_size);
-            text.draw_line(
-                &mut pixmap,
+            let old_w = text.measure_line_weighted(old, inputs.font_family, clock_size, Weight::BOLD);
+            text.draw_line_weighted(
+                pixmap,
                 old,
                 inputs.font_family,
                 clock_size,
                 faded(Color::WHITE, clock_alpha * (1.0 - t)),
                 (w - old_w) / 2.0,
                 clock_y - 6.0 * t,
+                Weight::BOLD,
             );
-            let new_w = text.measure_line(inputs.clock_text, inputs.font_family, clock_size);
-            text.draw_line(
-                &mut pixmap,
+            let new_w = text.measure_line_weighted(
+                inputs.clock_text,
+                inputs.font_family,
+                clock_size,
+                Weight::BOLD,
+            );
+            text.draw_line_weighted(
+                pixmap,
                 inputs.clock_text,
                 inputs.font_family,
                 clock_size,
                 faded(Color::WHITE, clock_alpha * t),
                 (w - new_w) / 2.0,
                 clock_y + 6.0 * (1.0 - t),
+                Weight::BOLD,
             );
         }
         None => {
-            let clock_w = text.measure_line(inputs.clock_text, inputs.font_family, clock_size);
-            text.draw_line(
-                &mut pixmap,
+            let clock_w = text.measure_line_weighted(
+                inputs.clock_text,
+                inputs.font_family,
+                clock_size,
+                Weight::BOLD,
+            );
+            text.draw_line_weighted(
+                pixmap,
                 inputs.clock_text,
                 inputs.font_family,
                 clock_size,
                 faded(Color::WHITE, clock_alpha),
                 (w - clock_w) / 2.0,
                 clock_y,
+                Weight::BOLD,
             );
         }
     }
 
-    // ---- Date line under the clock (hidden when date_text is empty). The
-    // clock's `origin_y` anchors its *top*, so the date is placed below the
-    // clock's actual glyph box (exact per font, cached) with a small gap.
+    // ---- Date line under the clock (hidden when date_text is empty) and
+    // now-playing / battery under that. Info is *not* nested under the date
+    // — an empty `date_format` used to hide the status line too.
+    let date_size = (w * 0.016).clamp(DATE_SIZE_MIN, DATE_SIZE_MAX);
+    let (clock_top, clock_height) =
+        text.measure_box_weighted(inputs.clock_text, inputs.font_family, clock_size, Weight::BOLD);
+    let mut below_y = clock_y_rest + elem_y(date_e, DRIFT_DATE) + clock_top + clock_height
+        + tokens::SPACE_SM as f32;
     if !inputs.date_text.is_empty() {
-        let date_size = (w * 0.016).clamp(DATE_SIZE_MIN, DATE_SIZE_MAX);
-        let (clock_top, clock_height) =
-            text.measure_box(inputs.clock_text, inputs.font_family, clock_size);
-        let date_y = clock_y_rest + elem_y(date_e, DRIFT_DATE) + clock_top + clock_height
-            + tokens::SPACE_SM as f32;
+        let date_y = below_y;
         let date_w = text.measure_line(inputs.date_text, inputs.font_family, date_size);
-        if let Some(r) = rects.as_deref_mut() {
+        if let Some(r) = rects.as_mut() {
             r.expand((w - date_w) / 2.0, date_y, (w + date_w) / 2.0, date_y + date_size);
         }
         text.draw_line(
-            &mut pixmap,
+            pixmap,
             inputs.date_text,
             inputs.font_family,
             date_size,
             faded(Color::WHITE, date_e * fade * 0.82),
             (w - date_w) / 2.0,
             date_y,
+        );
+        below_y = date_y + date_size + tokens::SPACE_XS as f32;
+    }
+    if !inputs.info_text.is_empty() {
+        let info_size = date_size * 0.85;
+        let info_y = below_y;
+        let info_anim = ease_out_cubic(staggered_t(inputs.appear_t, DATE_DELAY_MS + 120));
+        let info_shown = ellipsize(
+            text,
+            inputs.info_text,
+            inputs.font_family,
+            info_size,
+            w * 0.70,
+        );
+        let info_w = text.measure_line(&info_shown, inputs.font_family, info_size);
+        if let Some(r) = rects.as_mut() {
+            r.expand(
+                (w - info_w) / 2.0,
+                info_y,
+                (w + info_w) / 2.0,
+                info_y + info_size,
+            );
+        }
+        text.draw_line(
+            pixmap,
+            &info_shown,
+            inputs.font_family,
+            info_size,
+            faded(Color::WHITE, info_anim * fade * 0.6),
+            (w - info_w) / 2.0,
+            info_y,
         );
     }
 
@@ -493,14 +582,23 @@ fn compose_impl(
         cx * (1.0 - scale) + shake_x,
         cy * (1.0 - scale),
     );
+    // Map a point through the same scale-about-center + shake as the pill
+    // path, so dots/caret/hint/reveal travel with it.
+    let map_pill = |x: f32, y: f32| {
+        (
+            x * scale + cx * (1.0 - scale) + shake_x,
+            y * scale + cy * (1.0 - scale),
+        )
+    };
     // Chrome rect: pad for the shadow layers, breath/success rings, the
-    // shake offset and the scale overshoot.
+    // shake offset and the scale overshoot. Include shake so a failed
+    // frame's dirty AABB actually moves with the pill.
     if let Some(r) = rects.as_deref_mut() {
         const PILL_PAD: f32 = 26.0;
         r.expand(
-            pill_x - PILL_PAD,
+            pill_x + shake_x - PILL_PAD,
             pill_y - PILL_PAD,
-            pill_x + pill_w + PILL_PAD,
+            pill_x + shake_x + pill_w + PILL_PAD,
             pill_y + pill_h + PILL_PAD,
         );
     }
@@ -545,8 +643,10 @@ fn compose_impl(
         // Hairline border for depth — dropped on the wrong/success states
         // (the sketch sets `border-color: transparent` there).
         if !inputs.failed && inputs.unlock_t == 0.0 {
-            let mut stroke = tiny_skia::Stroke::default();
-            stroke.width = 1.0;
+            let stroke = tiny_skia::Stroke {
+                width: 1.0,
+                ..Default::default()
+            };
             let mut paint = Paint::default();
             paint.set_color(faded(
                 Color::WHITE,
@@ -558,8 +658,10 @@ fn compose_impl(
         // Idle breath: a faint accent ring blooms around the pill at the
         // breath peak (matches the sketch's `breathe` keyframes).
         if inputs.breathe_t > 0.0 && !inputs.failed && inputs.unlock_t == 0.0 {
-            let mut stroke = tiny_skia::Stroke::default();
-            stroke.width = 1.5;
+            let stroke = tiny_skia::Stroke {
+                width: 1.5,
+                ..Default::default()
+            };
             let mut paint = Paint::default();
             paint.set_color(faded(accent_color, BREATHE_RING_ALPHA * inputs.breathe_t * pill_alpha));
             pixmap.stroke_path(&path, &paint, &stroke, pill_xf, None);
@@ -569,8 +671,10 @@ fn compose_impl(
         // `FLASH_MS` of the unlock.
         if inputs.unlock_t > 0.0 && inputs.unlock_t < FLASH_FRAC {
             let flash_t = inputs.unlock_t / FLASH_FRAC;
-            let mut stroke = tiny_skia::Stroke::default();
-            stroke.width = 2.0 + 16.0 * flash_t;
+            let stroke = tiny_skia::Stroke {
+                width: 2.0 + 16.0 * flash_t,
+                ..Default::default()
+            };
             let mut paint = Paint::default();
             paint.set_color(faded(green_color, 0.55 * (1.0 - flash_t) * pill_alpha));
             pixmap.stroke_path(&path, &paint, &stroke, pill_xf, None);
@@ -599,7 +703,7 @@ fn compose_impl(
         // top, so the two never touch even with the pill's glow/shadow.
         let chip_y = pill_y - chip_h - tokens::SPACE_LG as f32;
         let chip_alpha = pill_e * fade;
-        if let Some(r) = rects.as_deref_mut() {
+        if let Some(r) = rects.as_mut() {
             r.expand(chip_x, chip_y, chip_x + chip_w, chip_y + chip_h);
         }
         if let Some(path) = rounded_rect(chip_x, chip_y, chip_w, chip_h, chip_h / 2.0) {
@@ -608,8 +712,10 @@ fn compose_impl(
             paint.set_color(faded(surface_color, chip_alpha));
             paint.anti_alias = true;
             pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
-            let mut stroke = tiny_skia::Stroke::default();
-            stroke.width = 1.0;
+            let stroke = tiny_skia::Stroke {
+                width: 1.0,
+                ..Default::default()
+            };
             let mut paint = Paint::default();
             paint.set_color(faded(Color::WHITE, PILL_BORDER_ALPHA * chip_alpha));
             pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
@@ -618,7 +724,7 @@ fn compose_impl(
         let label_y = chip_y + (chip_h - chip_height) / 2.0 - chip_top;
         let label_w = text.measure_line(&label, inputs.font_family, chip_size);
         text.draw_line(
-            &mut pixmap,
+            pixmap,
             &label,
             inputs.font_family,
             chip_size,
@@ -637,13 +743,16 @@ fn compose_impl(
         .max(1.0) as usize;
     let shown_dots = inputs.password_len.min(max_dots);
     let dot_y = pill_y + pill_h / 2.0;
-    if inputs.reveal && shown_dots > 0 {
+    // Skip in-pill text while the appear scale is ~0 (cosmic-text panics on
+    // a zero font size). Paths still go through `pill_xf` and collapse.
+    let contents_live = scale >= 0.05;
+    if inputs.reveal && shown_dots > 0 && contents_live {
         // Hold-to-reveal: render the actual password, centered, capped to
         // the pill width (truncate with a trailing ellipsis on overflow).
         // Measured into locals first — `text` is borrowed mutably by
         // `draw_line`, so all `measure_*` calls must happen up front.
         let reveal_size = tokens::FONT_SIZE_BASE as f32;
-        let reveal_rendered = reveal_fit(
+        let reveal_rendered = ellipsize(
             text,
             inputs.password,
             inputs.font_family,
@@ -654,22 +763,23 @@ fn compose_impl(
             text.measure_box(&reveal_rendered, inputs.font_family, reveal_size);
         let reveal_y = pill_y + (pill_h - reveal_height) / 2.0 - reveal_top;
         let reveal_w = text.measure_line(&reveal_rendered, inputs.font_family, reveal_size);
-        if let Some(r) = rects.as_deref_mut() {
+        let (rx, ry) = map_pill((w - reveal_w) / 2.0, reveal_y);
+        if let Some(r) = rects.as_mut() {
             r.expand(
-                pill_x + tokens::SPACE_LG as f32,
+                pill_x + shake_x + tokens::SPACE_LG as f32,
                 pill_y,
-                pill_x + pill_w - tokens::SPACE_LG as f32,
+                pill_x + shake_x + pill_w - tokens::SPACE_LG as f32,
                 pill_y + pill_h,
             );
         }
         text.draw_line(
-            &mut pixmap,
+            pixmap,
             &reveal_rendered,
             inputs.font_family,
-            reveal_size,
+            reveal_size * scale,
             faded(on_surface, pill_alpha),
-            (w - reveal_w) / 2.0,
-            reveal_y,
+            rx,
+            ry,
         );
     } else if shown_dots > 0 {
         let start_x = start_x_for(shown_dots, pill_x, pill_w);
@@ -702,7 +812,7 @@ fn compose_impl(
                     &path,
                     &paint,
                     tiny_skia::FillRule::Winding,
-                    Transform::identity(),
+                    pill_xf,
                     None,
                 );
             }
@@ -713,24 +823,26 @@ fn compose_impl(
     // caret only appears with the first typed character, so the pill reads as
     // an input field rather than an empty dark bar. Centered on the exact
     // glyph box (origin anchors the text top, not the baseline).
-    if shown_dots == 0 && !inputs.failed {
+    if shown_dots == 0 && !inputs.failed && contents_live {
         let hint = "Enter password";
         let hint_size = tokens::FONT_SIZE_BASE as f32;
         let hint_w = text.measure_line(hint, inputs.font_family, hint_size);
         let (hint_top, hint_height) = text.measure_box(hint, inputs.font_family, hint_size);
         let hint_y = pill_y + (pill_h - hint_height) / 2.0 - hint_top;
+        let (hx, hy) = map_pill((w - hint_w) / 2.0, hint_y);
         text.draw_line(
-            &mut pixmap,
+            pixmap,
             hint,
             inputs.font_family,
-            hint_size,
+            hint_size * scale,
             faded(on_surface, pill_alpha * 0.5),
-            (w - hint_w) / 2.0,
-            hint_y,
+            hx,
+            hy,
         );
-    } else if shown_dots > 0 {
+    } else if shown_dots > 0 && !inputs.reveal {
         // ---- Caret after the last dot: solid for half a second after a
-        // keystroke, then blinking at ~1.8 Hz.
+        // keystroke, then blinking at ~1.8 Hz. Hidden during hold-to-reveal
+        // (it used to sit at the last *dot* slot, overlapping the text).
         let caret_x = start_x_for(shown_dots, pill_x, pill_w)
             + (shown_dots - 1) as f32 * DOT_GAP
             + DOT_R
@@ -761,7 +873,7 @@ fn compose_impl(
                     &path,
                     &paint,
                     tiny_skia::FillRule::Winding,
-                    Transform::identity(),
+                    pill_xf,
                     None,
                 );
             }
@@ -779,11 +891,11 @@ fn compose_impl(
         let color = if inputs.failed { red_color } else { on_surface };
         let status_y = pill_y_rest + pill_h + tokens::SPACE_MD as f32 + elem_y(status_e, DRIFT_STATUS)
             + STATUS_SLIDE_PX * (1.0 - status_anim);
-        if let Some(r) = rects.as_deref_mut() {
+        if let Some(r) = rects.as_mut() {
             r.expand((w - status_w) / 2.0, status_y, (w + status_w) / 2.0, status_y + status_size);
         }
         text.draw_line(
-            &mut pixmap,
+            pixmap,
             status,
             inputs.font_family,
             status_size,
@@ -801,11 +913,11 @@ fn start_x_for(shown_dots: usize, pill_x: f32, pill_w: f32) -> f32 {
     pill_x + (pill_w - dots_w) / 2.0
 }
 
-/// Truncates a password for the hold-to-reveal view so it fits inside the
-/// pill, appending an ellipsis when trimmed. Returns the owned string to
-/// render (kept out of `compose` so the borrow of `text` ends before the
-/// draw call).
-fn reveal_fit(
+/// Truncates `password` (or any single-line string) so it fits in `max_w`,
+/// appending an ellipsis when trimmed. Shared by hold-to-reveal and the
+/// now-playing/battery line. Kept out of `compose` so the borrow of `text`
+/// ends before the draw call.
+fn ellipsize(
     text: &mut TextRenderer,
     password: &str,
     font_family: &str,
@@ -862,6 +974,9 @@ mod tests {
         // Bottom row is y/h = 0.75 → dim = 0.34 + (0.16 - 0.34) * 0.75 = 0.205.
         let expected = (255.0 * (1.0 - 0.205)) as u8;
         assert_eq!(bottom.red(), expected);
+        // GPU veil keeps A=1; software must not scale alpha.
+        assert_eq!(top.alpha(), 255);
+        assert_eq!(bottom.alpha(), 255);
     }
 
     #[test]
@@ -873,6 +988,7 @@ mod tests {
         assert_eq!(p.pixels(), before.as_slice());
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn inputs<'a>(
         bg: &'a Background,
         palette: &'a breadlock_ui::theme::Palette,
@@ -908,6 +1024,7 @@ mod tests {
             breathe_t: 0.0,
             status_t: 1.0,
             status_text: None,
+            info_text: "",
             appear_t,
             unlock_t,
             smooth_pan: false,
@@ -951,6 +1068,7 @@ mod tests {
             breathe_t: 0.0,
             status_t: 1.0,
             status_text: None,
+            info_text: "",
             appear_t: 1.0,
             unlock_t: 0.0,
             smooth_pan: false,
@@ -966,13 +1084,26 @@ mod tests {
         let mut text = TextRenderer::new();
         // Wrong-password shake mid-flight.
         let failed = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, true, 0.3, 0.4, 1.0, 0.0);
-        assert!(compose(&mut text, &failed).is_some());
-        // Success flash phase of the unlock.
+        let failed_px = compose(&mut text, &failed).expect("failed compose");
+        assert_eq!((failed_px.width(), failed_px.height()), (400, 300));
+        assert!(failed_px.pixels().iter().any(|p| p.alpha() > 0));
+        // Success flash phase of the unlock: still fully opaque chrome (flash
+        // holds rest pose), not already faded.
         let success = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 1.0, 0.12);
-        assert!(compose(&mut text, &success).is_some());
+        let success_px = compose(&mut text, &success).expect("success compose");
+        let rest = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 1.0, 0.0);
+        let rest_px = compose(&mut text, &rest).expect("rest compose");
+        // Flash frame should not be a near-empty fade — plenty of chrome left.
+        let flash_lit = success_px.pixels().iter().filter(|p| p.alpha() > 0).count();
+        let rest_lit = rest_px.pixels().iter().filter(|p| p.alpha() > 0).count();
+        assert!(
+            flash_lit as f32 > rest_lit as f32 * 0.5,
+            "success flash should keep chrome visible, lit {flash_lit} vs rest {rest_lit}"
+        );
         // Fully faded unlock returns just the background.
         let done = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 1.0, 1.0);
-        assert!(compose(&mut text, &done).is_some());
+        let done_px = compose(&mut text, &done).expect("done compose");
+        assert_eq!((done_px.width(), done_px.height()), (400, 300));
     }
 
     #[test]
@@ -999,10 +1130,10 @@ mod tests {
     fn reveal_fit_truncates_long_passwords() {
         let mut text = TextRenderer::new();
         // Short password fits unchanged.
-        assert_eq!(reveal_fit(&mut text, "hunter2", "sans-serif", 14.0, 200.0), "hunter2");
+        assert_eq!(ellipsize(&mut text, "hunter2", "sans-serif", 14.0, 200.0), "hunter2");
         // A very long one is trimmed and ends with an ellipsis.
         let long = "a".repeat(200);
-        let fitted = reveal_fit(&mut text, &long, "sans-serif", 14.0, 60.0);
+        let fitted = ellipsize(&mut text, &long, "sans-serif", 14.0, 60.0);
         assert!(fitted.ends_with('…'), "trimmed reveal should end with an ellipsis");
         assert!(fitted.len() < long.len());
         // And it actually fits the budget.
@@ -1099,6 +1230,19 @@ mod tests {
     }
 
     #[test]
+    fn overlay_motion_holds_rest_during_success_flash() {
+        // First FLASH_FRAC of unlock_t is the green flash at full opacity.
+        let (a_rest, y_rest) = overlay_motion(1.0, 0.0);
+        let (a_flash, y_flash) = overlay_motion(1.0, FLASH_FRAC * 0.5);
+        assert!((a_flash - a_rest).abs() < 1e-6, "flash must not fade chrome, got {a_flash}");
+        assert!((y_flash - y_rest).abs() < 1e-6, "flash must not drift chrome, got {y_flash}");
+        // After the flash, fade/drift begin.
+        let (a_fade, y_fade) = overlay_motion(1.0, (FLASH_FRAC + 1.0) * 0.5);
+        assert!(a_fade < a_rest, "post-flash should fade, got {a_fade}");
+        assert!(y_fade < y_rest, "post-flash should drift up, got {y_fade}");
+    }
+
+    #[test]
     fn compose_chrome_rect_contains_clock_and_pill() {
         let bg = Background::Color(Color::BLACK);
         let palette = breadlock_ui::theme::Palette::default();
@@ -1116,23 +1260,107 @@ mod tests {
         assert!(rect.y1 > 300.0 * 0.5 + 24.0, "rect must cover the pill band");
         // Both are horizontally centered.
         assert!(rect.x0 < 200.0 && rect.x1 > 200.0, "rect must straddle center");
+        // Origin-stuck Default(0,0,…) used to pass the checks above (0.min
+        // never leaves 0, and 0 < 200 && x1 > 200 still holds). Fail that.
+        assert!(
+            rect.x0 > 0.0 && rect.y0 > 0.0,
+            "chrome rect must not be stuck at the origin, got {rect:?}"
+        );
     }
 
     #[test]
-    fn compose_chrome_rect_empty_when_veil_hidden() {
+    fn compose_chrome_rect_empty_when_unlock_finished() {
         let bg = Background::Color(Color::BLACK);
         let palette = breadlock_ui::theme::Palette::default();
         let mut text = TextRenderer::new();
         let mut pixmap = Pixmap::new(400, 300).unwrap();
-        // appear_t = 0 → veil_alpha 0 → nothing drawn, rect stays default.
-        let inputs = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 0.0, 0.0);
+        // unlock_t = 1 → chrome is gone; appear_t = 0 still draws (invisible)
+        // chrome so the GPU dirty rect is valid from the first frame.
+        let inputs = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 1.0, 1.0);
         let rect = compose_chrome(&mut pixmap, &mut text, &inputs);
-        assert!(rect.x1 <= rect.x0 && rect.y1 <= rect.y0, "hidden chrome must yield an empty rect");
-        // And the pixmap is fully transparent.
+        assert!(rect.is_empty(), "finished unlock must yield an empty rect, got {rect:?}");
         assert!(
             pixmap.pixels().iter().all(|p| p.alpha() == 0),
-            "hidden chrome must leave the pixmap transparent"
+            "finished unlock must leave the pixmap transparent"
         );
+    }
+
+    #[test]
+    fn compose_chrome_rect_valid_at_appear_start() {
+        let bg = Background::Color(Color::BLACK);
+        let palette = breadlock_ui::theme::Palette::default();
+        let mut text = TextRenderer::new();
+        let mut pixmap = Pixmap::new(400, 300).unwrap();
+        let inputs = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 0.0, 0.0);
+        let rect = compose_chrome(&mut pixmap, &mut text, &inputs);
+        assert!(
+            !rect.is_empty() && rect.x0 > 0.0 && rect.y0 > 0.0,
+            "appear t=0 must still produce a real chrome rect, got {rect:?}"
+        );
+    }
+
+    #[test]
+    fn compose_chrome_failed_shake_shifts_rect_x() {
+        let bg = Background::Color(Color::BLACK);
+        let palette = breadlock_ui::theme::Palette::default();
+        let mut text = TextRenderer::new();
+        let mut pixmap = Pixmap::new(400, 300).unwrap();
+        let rest = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, true, 0.0, 1.0, 1.0, 0.0);
+        let r0 = compose_chrome(&mut pixmap, &mut text, &rest);
+        let mid = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, true, 0.3, 1.0, 1.0, 0.0);
+        let r1 = compose_chrome(&mut pixmap, &mut text, &mid);
+        assert!(
+            (r0.x0 - r1.x0).abs() > 0.5 || (r0.x1 - r1.x1).abs() > 0.5,
+            "failed shake must shift chrome rect x, rest={r0:?} shaken={r1:?}"
+        );
+        // Chrome-only pixmaps: full `compose()` is dominated by the opaque
+        // wallpaper, so a 4px pill shake would not move that centroid.
+        let mut rest_px = Pixmap::new(400, 300).unwrap();
+        compose_chrome(&mut rest_px, &mut text, &rest);
+        let mut shaken_px = Pixmap::new(400, 300).unwrap();
+        compose_chrome(&mut shaken_px, &mut text, &mid);
+        let centroid_x = |p: &Pixmap| -> f32 {
+            let mut sx = 0.0f32;
+            let mut n = 0.0f32;
+            for (i, px) in p.pixels().iter().enumerate() {
+                if px.alpha() > 32 {
+                    sx += (i as u32 % p.width()) as f32;
+                    n += 1.0;
+                }
+            }
+            if n > 0.0 { sx / n } else { 0.0 }
+        };
+        let dx = (centroid_x(&shaken_px) - centroid_x(&rest_px)).abs();
+        assert!(
+            dx > 0.2,
+            "pill contents should shake with the pill, centroid dx={dx}"
+        );
+    }
+
+    #[test]
+    fn compose_chrome_info_text_draws_without_date() {
+        let bg = Background::Color(Color::BLACK);
+        let palette = breadlock_ui::theme::Palette::default();
+        let mut text = TextRenderer::new();
+        let mut pixmap = Pixmap::new(400, 300).unwrap();
+        let mut with_info = inputs(&bg, &palette, "12:34", "", 0, false, 0.0, 1.0, 1.0, 0.0);
+        with_info.info_text = "Battery 87% · charging";
+        let with = compose_chrome(&mut pixmap, &mut text, &with_info);
+        let mut pixmap2 = Pixmap::new(400, 300).unwrap();
+        let without_info = inputs(&bg, &palette, "12:34", "", 0, false, 0.0, 1.0, 1.0, 0.0);
+        let without = compose_chrome(&mut pixmap2, &mut text, &without_info);
+        // The pill still sits below the info line, so y1 is pill-dominated.
+        // The info line must still produce extra chrome pixels and a rect
+        // that is not stuck at the origin.
+        let lit = |p: &Pixmap| p.pixels().iter().filter(|px| px.alpha() > 32).count();
+        assert!(
+            lit(&pixmap) > lit(&pixmap2),
+            "info line must draw extra chrome when date_text is empty (with {} lit, without {})",
+            lit(&pixmap),
+            lit(&pixmap2)
+        );
+        assert!(with.x0 > 0.0 && with.y0 > 0.0 && !with.is_empty());
+        assert!(without.x0 > 0.0 && !without.is_empty());
     }
 
     #[test]

@@ -9,10 +9,30 @@ impl CompositorHandler for AppState {
     fn scale_factor_changed(
         &mut self,
         _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _new_factor: i32,
+        qh: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        new_factor: i32,
     ) {
+        // Protocol: buffer scale must be > 0. Treat 0 (or negative) as 1.
+        let scale = new_factor.max(1);
+        let (lock_surface, width, height) = {
+            let Some(s) = self
+                .surfaces
+                .iter_mut()
+                .find(|s| s.surface.wl_surface() == surface)
+            else {
+                return;
+            };
+            s.scale = scale;
+            surface.set_buffer_scale(scale);
+            let width = s.width.saturating_mul(scale as u32);
+            let height = s.height.saturating_mul(scale as u32);
+            if let Some(gs) = s.gpu.as_mut() {
+                gs.resize(width, height);
+            }
+            (s.surface.clone(), width, height)
+        };
+        self.redraw_surface(qh, &lock_surface, width, height);
     }
 
     fn transform_changed(
@@ -66,6 +86,12 @@ impl OutputHandler for AppState {
         qh: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
+        // SCTK also fires `new_output` for outputs already bound at
+        // registry-init; `main` already created a lock surface for those.
+        // One lock surface per output is a protocol requirement.
+        if self.surfaces.iter().any(|s| s.output == output) {
+            return;
+        }
         let Some(session_lock) = self.session_lock.clone() else {
             return;
         };
@@ -76,7 +102,10 @@ impl OutputHandler for AppState {
             output,
             width: 0,
             height: 0,
+            scale: 1,
             gpu: None,
+            shm_pool: None,
+            shm_buffer: None,
         });
     }
 

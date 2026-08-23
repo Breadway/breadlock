@@ -1,5 +1,7 @@
 # Copy to ~/.config/breadlock/breadlock.toml — every field is optional and
 # defaults to the value shown here if omitted or the file doesn't exist.
+# A malformed file also falls back to defaults (the locker/greeter warn
+# rather than treating it as missing).
 
 [background]
 # "color" (bread-theme palette background) or "image" (a PNG, cover-fit)
@@ -8,8 +10,9 @@ path = ""
 # v2 feature — accepted but currently just logs a warning and shows the
 # background unblurred (needs a wlr-screencopy capture, not implemented yet).
 blur = false
-# Slow Ken Burns pan on image backgrounds (gentle drift + zoom). Opt-in: the
-# background redraws continuously at a low frame rate while locked.
+# Slow Ken Burns pan on image backgrounds (gentle drift + zoom). Opt-in.
+# Cheap on the GPU wallpaper path; the software fallback still redraws
+# the background continuously at a low frame rate while locked.
 ken_burns = false
 
 [clock]
@@ -23,13 +26,13 @@ date_format = "%A · %b %d"
 family = "Varela Round"
 
 [input]
-# How long the "wrong password" state (red pill) shows before input
-# re-enables, in milliseconds.
+# How long the red "wrong password" UI shows, in milliseconds. Typing is
+# still accepted during this window (it clears the failed state).
 fail_timeout_ms = 800
 # Hold Tab to reveal the typed password as plain characters (instead of
 # dots) while held. Tab can never be part of a password, so it's always
-# safe as a reveal gesture.
-reveal_hold = true
+# safe as a reveal gesture. Default off.
+reveal_hold = false
 
 [animation]
 # Subtle glow pulse on the password pill every few seconds while idle.
@@ -37,3 +40,11 @@ breathe = true
 # Deepen the dim veil after this many seconds of no keystrokes (0 = off).
 # A gentle extra darkening for OLED/burn-in or late-night comfort.
 idle_dim_after_secs = 0
+
+[status]
+# Now-playing (MPRIS) and battery (upower) shown as a small line under the
+# clock. Each flag controls both display and whether that D-Bus source is
+# polled (background thread, every few seconds). Both default on; they
+# degrade silently (no line) when the service or bus is unavailable.
+now_playing = true
+battery = true

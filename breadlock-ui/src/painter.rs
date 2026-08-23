@@ -5,6 +5,7 @@
 //! instead and doesn't need a font-shaping stack.
 
 pub use bread_theme::tokens;
+pub use cosmic_text::Weight;
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache};
 use std::collections::HashMap;
 use tiny_skia::{Path, PathBuilder, Pixmap, PremultipliedColorU8};
@@ -34,9 +35,13 @@ pub struct TextRenderer {
     font_system: FontSystem,
     swash_cache: SwashCache,
     /// Exact glyph-pixel span `(top, height)` per unique `(text, family,
-    /// size)` — see [`Self::measure_box`]. Keyed by size in centipixels so
-    /// fractional sizes don't thrash the cache.
-    boxes: HashMap<(String, String, u32), (f32, f32)>,
+    /// size, weight)` — see [`Self::measure_box`]. Keyed by size in
+    /// centipixels so fractional sizes don't thrash the cache.
+    boxes: HashMap<(String, String, u32, u16), (f32, f32)>,
+    /// Whether `Family::Name(family)` resolved to an installed face. Missing
+    /// families fall back to `Family::SansSerif` instead of panicking or
+    /// drawing tofu; the result is cached so we don't scan fontdb every frame.
+    family_ok: HashMap<String, bool>,
 }
 
 impl Default for TextRenderer {
@@ -51,14 +56,51 @@ impl TextRenderer {
             font_system: FontSystem::new(),
             swash_cache: SwashCache::new(),
             boxes: HashMap::new(),
+            family_ok: HashMap::new(),
         }
     }
 
-    fn shape_line(&mut self, text: &str, family: &str, size_px: f32, max_width: f32) -> Buffer {
+    /// `Family::Name` if `family` is installed, otherwise the generic
+    /// sans-serif. Never panics on a missing configured font.
+    fn resolve_family<'a>(&mut self, family: &'a str) -> Family<'a> {
+        if family.is_empty() || family.eq_ignore_ascii_case("sans-serif") {
+            return Family::SansSerif;
+        }
+        let present = if let Some(&ok) = self.family_ok.get(family) {
+            ok
+        } else {
+            let ok = self.font_system.db().faces().any(|face| {
+                face.families
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(family))
+            });
+            self.family_ok.insert(family.to_string(), ok);
+            ok
+        };
+        if present {
+            Family::Name(family)
+        } else {
+            Family::SansSerif
+        }
+    }
+
+    fn shape_line(
+        &mut self,
+        text: &str,
+        family: &str,
+        size_px: f32,
+        max_width: f32,
+        weight: Weight,
+    ) -> Buffer {
+        // cosmic-text panics if `metrics.font_size` is zero; callers may pass a
+        // scaled-to-zero size during the pill's appear overshoot at t=0.
+        let size_px = size_px.max(0.01);
         let metrics = Metrics::new(size_px, size_px * 1.25);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         buffer.set_size(&mut self.font_system, Some(max_width), Some(size_px * 2.0));
-        let attrs = Attrs::new().family(Family::Name(family));
+        let attrs = Attrs::new()
+            .family(self.resolve_family(family))
+            .weight(weight);
         buffer.set_text(&mut self.font_system, text, &attrs, Shaping::Advanced);
         buffer.shape_until_scroll(&mut self.font_system, false);
         buffer
@@ -76,17 +118,46 @@ impl TextRenderer {
     /// (clock per minute, date per day, static hints once), so the one-off
     /// cost is negligible and the result is correct for any font.
     pub fn measure_box(&mut self, text: &str, family: &str, size_px: f32) -> (f32, f32) {
-        let key = (text.to_string(), family.to_string(), (size_px * 100.0) as u32);
+        self.measure_box_weighted(text, family, size_px, Weight::NORMAL)
+    }
+
+    /// Like [`Self::measure_box`] with an explicit font weight (the clock
+    /// uses [`Weight::BOLD`] / 700).
+    pub fn measure_box_weighted(
+        &mut self,
+        text: &str,
+        family: &str,
+        size_px: f32,
+        weight: Weight,
+    ) -> (f32, f32) {
+        let key = (
+            text.to_string(),
+            family.to_string(),
+            (size_px * 100.0) as u32,
+            weight.0,
+        );
         if let Some(b) = self.boxes.get(&key) {
             return *b;
         }
-        let w = self.measure_line(text, family, size_px).ceil().max(1.0) as u32;
+        let w = self
+            .measure_line_weighted(text, family, size_px, weight)
+            .ceil()
+            .max(1.0) as u32;
         let h = (size_px * 1.5).ceil().max(1.0) as u32;
         let mut probe = match Pixmap::new(w, h) {
             Some(p) => p,
             None => return (0.0, size_px),
         };
-        self.draw_line(&mut probe, text, family, size_px, tiny_skia::Color::WHITE, 0.0, 0.0);
+        self.draw_line_weighted(
+            &mut probe,
+            text,
+            family,
+            size_px,
+            tiny_skia::Color::WHITE,
+            0.0,
+            0.0,
+            weight,
+        );
         let (mut top, mut bottom) = (h as f32, 0.0f32);
         for y in 0..h {
             for x in 0..w {
@@ -108,7 +179,17 @@ impl TextRenderer {
     /// Width in pixels `text` would occupy if drawn via [`Self::draw_line`]
     /// with the same `family`/`size_px` — use to center text before drawing.
     pub fn measure_line(&mut self, text: &str, family: &str, size_px: f32) -> f32 {
-        let buffer = self.shape_line(text, family, size_px, f32::INFINITY);
+        self.measure_line_weighted(text, family, size_px, Weight::NORMAL)
+    }
+
+    pub fn measure_line_weighted(
+        &mut self,
+        text: &str,
+        family: &str,
+        size_px: f32,
+        weight: Weight,
+    ) -> f32 {
+        let buffer = self.shape_line(text, family, size_px, f32::INFINITY, weight);
         buffer
             .layout_runs()
             .map(|run| run.line_w)
@@ -118,6 +199,8 @@ impl TextRenderer {
     /// Shapes `text` as a single line in `family` at `size_px` and blits it
     /// into `pixmap` with its top-left baseline anchor at `(origin_x,
     /// origin_y)`. Pixels outside `pixmap`'s bounds are silently clipped.
+    /// Origins stay float: subpixel X goes into cosmic-text's CacheKey bins
+    /// so appear/unlock motion doesn't stair-step against the pill path.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_line(
         &mut self,
@@ -129,7 +212,27 @@ impl TextRenderer {
         origin_x: f32,
         origin_y: f32,
     ) {
-        let buffer = self.shape_line(text, family, size_px, pixmap.width() as f32);
+        self.draw_line_weighted(
+            pixmap, text, family, size_px, color, origin_x, origin_y, Weight::NORMAL,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_line_weighted(
+        &mut self,
+        pixmap: &mut Pixmap,
+        text: &str,
+        family: &str,
+        size_px: f32,
+        color: tiny_skia::Color,
+        origin_x: f32,
+        origin_y: f32,
+        weight: Weight,
+    ) {
+        // Infinite width so this agrees with [`Self::measure_line`] (a finite
+        // width would wrap, and centering from the unwrapped measure then
+        // goes negative). Overflow is clipped at blit time.
+        let buffer = self.shape_line(text, family, size_px, f32::INFINITY, weight);
 
         let c8 = color.to_color_u8();
         // cosmic-text's glyph-Mask rendering drops the base color's alpha
@@ -141,30 +244,37 @@ impl TextRenderer {
         let text_color = cosmic_text::Color::rgba(c8.red(), c8.green(), c8.blue(), base_alpha);
 
         let (width, height) = (pixmap.width() as i32, pixmap.height() as i32);
-        let ox = origin_x as i32;
-        let oy = origin_y as i32;
-        buffer.draw(
-            &mut self.font_system,
-            &mut self.swash_cache,
-            text_color,
-            |x, y, _w, _h, glyph_color| {
-                let (px, py) = (ox + x, oy + y);
-                if px < 0 || py < 0 || px >= width || py >= height {
-                    return;
-                }
-                let (r, g, b, a) = glyph_color.as_rgba_tuple();
-                if a == 0 {
-                    return;
-                }
-                // `a` is the glyph coverage; combine it with the requested
-                // color alpha for the true source alpha.
-                let a = (a as u32 * base_alpha as u32 / 255) as u8;
-                if a == 0 {
-                    return;
-                }
-                blend_over(pixmap, px as u32, py as u32, r, g, b, a);
-            },
-        );
+        for run in buffer.layout_runs() {
+            for glyph in run.glyphs.iter() {
+                // Subpixel origin: X lands in CacheKey's subpixel bins; Y is
+                // hinted (cosmic-text truncates the Y offset) and then the
+                // run's line_y is rounded at blit so we don't trunc origin
+                // independently of glyph placement.
+                let physical = glyph.physical((origin_x, origin_y), 1.0);
+                let glyph_color = glyph.color_opt.unwrap_or(text_color);
+                self.swash_cache.with_pixels(
+                    &mut self.font_system,
+                    physical.cache_key,
+                    glyph_color,
+                    |x, y, color| {
+                        let px = physical.x + x;
+                        let py = run.line_y.round() as i32 + physical.y + y;
+                        if px < 0 || py < 0 || px >= width || py >= height {
+                            return;
+                        }
+                        let (r, g, b, a) = color.as_rgba_tuple();
+                        if a == 0 {
+                            return;
+                        }
+                        let a = (a as u32 * base_alpha as u32 / 255) as u8;
+                        if a == 0 {
+                            return;
+                        }
+                        blend_over(pixmap, px as u32, py as u32, r, g, b, a);
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -287,6 +397,23 @@ mod tests {
             low_max < 100,
             "10%-alpha text must not render near-white, got {low_max}"
         );
+    }
+
+    #[test]
+    fn missing_font_family_falls_back_without_panic() {
+        let mut pixmap = Pixmap::new(64, 16).unwrap();
+        pixmap.fill(tiny_skia::Color::BLACK);
+        let mut renderer = TextRenderer::new();
+        renderer.draw_line(
+            &mut pixmap,
+            "12:34",
+            "DefinitelyNotARealFontFamily_xyzzy",
+            12.0,
+            tiny_skia::Color::WHITE,
+            2.0,
+            2.0,
+        );
+        assert!(pixmap.pixels().iter().any(|p| p.alpha() > 0));
     }
 
     #[test]

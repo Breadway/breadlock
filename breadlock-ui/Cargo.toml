@@ -14,7 +14,6 @@ toml.workspace = true
 # instead, so it builds without pulling these in).
 tiny-skia = { version = "0.12", optional = true }
 cosmic-text = { version = "0.14", optional = true }
-chrono = { version = "0.4", optional = true }
 
 [features]
-paint = ["dep:tiny-skia", "dep:cosmic-text", "dep:chrono"]
+paint = ["dep:tiny-skia", "dep:cosmic-text"]

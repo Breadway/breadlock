@@ -40,6 +40,10 @@ struct Scene {
     date: &'static str,
     clock_old: Option<(&'static str, f32)>,
     password_len: usize,
+    /// Actual password bytes. Empty except for the reveal scene: production
+    /// `submit()` zeros the secret (and `password_len` follows `password.len()`),
+    /// so checking frames show an empty pill under "Checking…".
+    password: &'static str,
     failed: bool,
     failed_t: f32,
     dot_pop_t: f32,
@@ -49,6 +53,8 @@ struct Scene {
     /// lit below 0.5.
     t_secs: f32,
     status: Option<&'static str>,
+    /// Now-playing / battery line under the clock (empty hides it).
+    info: &'static str,
     appear_t: f32,
     unlock_t: f32,
     breathe_t: f32,
@@ -67,12 +73,14 @@ impl Default for Scene {
             date: "Friday · Aug 21",
             clock_old: None,
             password_len: 0,
+            password: "",
             failed: false,
             failed_t: 0.0,
             dot_pop_t: 1.0,
             keystroke_age: None,
             t_secs: 0.2,
             status: None,
+            info: "",
             appear_t: 1.0,
             unlock_t: 0.0,
             breathe_t: 0.0,
@@ -131,6 +139,7 @@ fn bench(args: &[String]) {
             breathe_t: 0.0,
             status_t: 1.0,
             status_text: None,
+            info_text: "",
             appear_t: 1.0,
             unlock_t: 0.0,
             smooth_pan: true,
@@ -179,6 +188,7 @@ fn bench(args: &[String]) {
             breathe_t: (i % 10) as f32 / 10.0,
             status_t: 1.0,
             status_text: None,
+            info_text: "",
             appear_t: 1.0,
             unlock_t: 0.0,
             smooth_pan: true,
@@ -230,8 +240,9 @@ fn main() {
         Scene { name: "06-typing-pop", password_len: 6, dot_pop_t: 0.4, keystroke_age: Some(0.2), ..Scene::default() },
         // ---- Idle blink: two dots, caret lit (phase 0.36 → visible half-cycle).
         Scene { name: "07-idle-blink", password_len: 2, ..Scene::default() },
-        // ---- Checking: status mid slide-in with the animated ellipsis.
-        Scene { name: "08-checking", status: Some("Checking…"), status_t: 0.5, ..Scene::default() },
+        // ---- Checking: status mid slide-in. Live submit() zeros the secret
+        // so password_len is 0 — don't fake a filled pill here.
+        Scene { name: "08-checking", status: Some("Checking…"), status_t: 0.5, password_len: 0, password: "", ..Scene::default() },
         // ---- Wrong password: mid-shake, red pill, red status (settled).
         Scene { name: "09-failed-shake", password_len: 6, failed: true, failed_t: 0.35, status: Some("Wrong password"), ..Scene::default() },
         // ---- Success: green flash ring, dots cascading accent → white.
@@ -245,11 +256,13 @@ fn main() {
         // ---- Non-default layout: layout chip instead of caps.
         Scene { name: "14-layout-2", password_len: 4, layout_index: 1, ..Scene::default() },
         // ---- Hold-to-reveal: plain password characters instead of dots.
-        Scene { name: "15-reveal", password_len: 8, reveal: true, ..Scene::default() },
+        Scene { name: "15-reveal", password_len: 7, password: "hunter2", reveal: true, ..Scene::default() },
         // ---- Idle auto-dim: deepened veil (rest pose + full idle dim).
         Scene { name: "16-idle-dim", idle_dim: 1.0, ..Scene::default() },
         // ---- Repeat failure: attempt counter in the status line.
         Scene { name: "17-failed-3x", password_len: 6, failed: true, failed_t: 0.8, status: Some("Wrong password — 3 failed attempts"), ..Scene::default() },
+        // ---- D-Bus status: now-playing + battery under the clock.
+        Scene { name: "18-status-info", info: "The War on Drugs — Red Eyes  ·  87% · charging", ..Scene::default() },
     ];
 
     let mut text = TextRenderer::new();
@@ -265,7 +278,7 @@ fn main() {
             date_text: scene.date,
             clock_old: scene.clock_old,
             password_len: scene.password_len,
-            password: "hunter2",
+            password: scene.password,
             reveal: scene.reveal,
             caps_lock: scene.caps_lock,
             layout_index: scene.layout_index,
@@ -278,6 +291,7 @@ fn main() {
             breathe_t: scene.breathe_t,
             status_t: scene.status_t,
             status_text: scene.status,
+            info_text: scene.info,
             appear_t: scene.appear_t,
             unlock_t: scene.unlock_t,
             smooth_pan: false,

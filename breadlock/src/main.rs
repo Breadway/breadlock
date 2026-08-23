@@ -7,6 +7,7 @@ mod input;
 mod lock;
 mod render;
 mod state;
+mod status;
 
 use smithay_client_toolkit::compositor::CompositorState;
 use smithay_client_toolkit::output::OutputState;
@@ -128,18 +129,21 @@ fn run_lock() {
             None
         }
     };
+    let _running = bread_events::enter_lock_process();
 
     // Honor bread.command.lock.lock / unlock while this locker is up
     // (already-locked is bread.lock.lock.done; unlock is loginctl, not
     // compositor unlock()). Unlocked-path commands need `breadlock listen`.
     let _commands = bread_events::subscribe_commands();
 
-    let username = std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_else(|_| {
-            tracing::error!("neither $USER nor $LOGNAME is set — refusing to start without a username to authenticate");
-            std::process::exit(1);
-        });
+    let username = auth::username_from_process().unwrap_or_else(|| {
+        tracing::error!(
+            "could not resolve a username (passwd lookup and $USER/$LOGNAME all failed) — \
+             taking the session lock anyway and refusing PAM"
+        );
+        String::new()
+    });
+    let username_missing = username.is_empty();
 
     let config = config::load();
     let palette = breadlock_ui::theme::load_palette();
@@ -163,7 +167,10 @@ fn run_lock() {
     let loop_handle = event_loop.handle();
 
     let auth_result_qh = qh.clone();
-    let auth_tx = auth::register(&loop_handle, move |state: &mut AppState, result| {
+    let auth_tx = auth::register(&loop_handle, move |state: &mut AppState, generation, result| {
+        if generation != state.auth_generation {
+            return;
+        }
         match result {
             Ok(()) => {
                 // Keep the lock surfaces up and fade the overlay out.
@@ -171,6 +178,8 @@ fn run_lock() {
                 // mid-fade is fail-secure (session stays locked).
                 tracing::info!("authenticated, fading out");
                 state.failed_attempts = 0;
+                state.auth_state = AuthState::Idle;
+                state.checking_started = None;
                 if state.unlocking.is_none() {
                     state.unlocking = Some(std::time::Instant::now());
                 }
@@ -187,14 +196,16 @@ fn run_lock() {
                             %err,
                             "PAM context initialization failed — check /etc/pam.d/breadlock exists and is valid; authentication cannot succeed until this is fixed"
                         );
-                        state.auth_state = AuthState::ConfigError;
-                        state.failed_at = Some(std::time::Instant::now());
+                        state.enter_fail(AuthState::ConfigError);
                     }
-                    auth::AuthError::Authenticate | auth::AuthError::AccountInvalid => {
+                    auth::AuthError::Authenticate => {
                         tracing::warn!(%err, "authentication failed");
                         state.failed_attempts = state.failed_attempts.saturating_add(1);
-                        state.auth_state = AuthState::Failed;
-                        state.failed_at = Some(std::time::Instant::now());
+                        state.enter_fail(AuthState::Failed);
+                    }
+                    auth::AuthError::AccountInvalid => {
+                        tracing::warn!(%err, "account locked or expired");
+                        state.enter_fail(AuthState::AccountInvalid);
                     }
                 }
                 state.schedule_clear_failed(auth_result_qh.clone());
@@ -202,6 +213,17 @@ fn run_lock() {
         }
         state.redraw_all(&auth_result_qh);
     });
+
+    // D-Bus status (now-playing / battery): the poller posts snapshots here
+    // and each one triggers a redraw so the line under the clock stays live.
+    let status_qh = qh.clone();
+    let status_tx = status::register(&loop_handle, move |state: &mut AppState, info| {
+        if state.status_info != info {
+            state.status_info = info;
+            state.redraw_all(&status_qh);
+        }
+    });
+    status::spawn_poller(status_tx, config.status.now_playing, config.status.battery);
 
     let compositor_state =
         CompositorState::bind(&globals, &qh).expect("compositor global not advertised");
@@ -221,6 +243,7 @@ fn run_lock() {
         session_lock: None,
         surfaces: Vec::new(),
         keyboard: None,
+        keyboard_seat: None,
         config,
         palette,
         background,
@@ -230,16 +253,20 @@ fn run_lock() {
         // Pre-reserve capacity so ordinary typing doesn't reallocate — a
         // reallocation leaves the old (unzeroized) backing buffer, with the
         // password bytes still in it, on the heap.
-        password: zeroize::Zeroizing::new(String::with_capacity(128)),
+        password: zeroize::Zeroizing::new(String::with_capacity(state::PASSWORD_CAP)),
+        password_display_len: 0,
         auth_state: AuthState::Idle,
         auth_tx,
+        auth_generation: 0,
+        failed_generation: 0,
+        checking_started: None,
         started: std::time::Instant::now(),
         appear_started: None,
         unlocking: None,
         last_keystroke: None,
         failed_at: None,
         last_clock_text: String::new(),
-        clock_anim_started: None,
+        clock_from: None,
         status_anim_started: None,
         last_auth_state: AuthState::Idle,
         breathe_started: None,
@@ -253,6 +280,7 @@ fn run_lock() {
         reveal_held: false,
         last_activity: std::time::Instant::now(),
         failed_attempts: 0,
+        status_info: status::StatusInfo::default(),
         exit: false,
     };
 
@@ -272,10 +300,17 @@ fn run_lock() {
             output,
             width: 0,
             height: 0,
+            scale: 1,
             gpu: None,
+            shm_pool: None,
+            shm_buffer: None,
         });
     }
     app_state.session_lock = Some(session_lock);
+
+    if username_missing {
+        app_state.enter_fail(AuthState::ConfigError);
+    }
 
     WaylandSource::new(conn, event_queue)
         .insert(loop_handle.clone())

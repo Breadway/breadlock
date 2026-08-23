@@ -12,7 +12,9 @@
 //!
 //! If EGL initialization fails for any reason (headless, no GPU, compositor
 //! without EGL), [`GpuRenderer::new`] returns `None` and the locker falls
-//! back to the fully-software path unchanged.
+//! back to the fully-software path unchanged. `GpuSurface` destroys its
+//! native window and EGL surface on drop (output unplug); `render_frame`
+//! returns `false` on make_current/swap failure so the caller can fall back.
 
 use crate::render::{self, FrameInputs};
 use breadlock_ui::config::{Background as BackgroundConfig, BackgroundMode};
@@ -29,9 +31,11 @@ use wayland_client::{Connection, Proxy};
 const KENBURNS_PERIOD_S: f32 = 90.0;
 const KENBURNS_ZOOM: f32 = 1.06;
 
-const EGL_ATTRIBS: [egl::Int; 11] = [
+const EGL_ATTRIBS: [egl::Int; 13] = [
     egl::SURFACE_TYPE,
-    (egl::WINDOW_BIT | egl::PBUFFER_BIT) as egl::Int,
+    egl::WINDOW_BIT as egl::Int,
+    egl::RENDERABLE_TYPE,
+    egl::OPENGL_ES2_BIT as egl::Int,
     egl::RED_SIZE,
     8,
     egl::GREEN_SIZE,
@@ -101,22 +105,41 @@ pub struct wl_egl_window {
 extern "C" {
     fn wl_egl_window_create(surface: *mut wl_surface, width: i32, height: i32) -> *mut wl_egl_window;
     fn wl_egl_window_resize(window: *mut wl_egl_window, width: i32, height: i32, dx: i32, dy: i32);
+    fn wl_egl_window_destroy(window: *mut wl_egl_window);
 }
 
-// EGL objects are intentionally not destroyed on the way out: the process
-// exits immediately after unlock, and dropping the pbuffer/context while it
-// might still be current would be UB — leaving them for the OS is cleaner.
-const _: () = ();
+/// EGL entry points captured at surface creation so `Drop` can destroy the
+/// window/surface without holding a pointer into `GpuRenderer` (which would
+/// dangle if AppState is moved).
+struct EglSurfaceFns {
+    destroy_surface: unsafe extern "system" fn(egl::EGLDisplay, egl::EGLSurface) -> egl::Boolean,
+    make_current: unsafe extern "system" fn(
+        egl::EGLDisplay,
+        egl::EGLSurface,
+        egl::EGLSurface,
+        egl::EGLContext,
+    ) -> egl::Boolean,
+    get_current_surface: unsafe extern "system" fn(egl::Int) -> egl::EGLSurface,
+}
 
 /// One EGL-backed lock surface. Created lazily on the first `configure` (the
-/// size is unknown before that) and resized on subsequent ones. The process
-/// exits right after unlock, so EGL objects are deliberately not destroyed
-/// individually.
+/// size is unknown before that) and resized on subsequent ones. Dropped on
+/// output unplug (`output_destroyed` retains the `LockSurface` out of the
+/// vec), so the native window and EGL surface must be destroyed here —
+/// process-exit-only was wrong for hotplug.
 pub struct GpuSurface {
     egl_window: *mut wl_egl_window,
     egl_surface: egl::Surface,
+    display: egl::Display,
+    egl_fns: Option<EglSurfaceFns>,
     width: u32,
     height: u32,
+    /// Per-surface chrome texture/pixmap so two outputs of different sizes
+    /// don't thrash one shared texture (which left undefined texels in the
+    /// leftover region).
+    chrome_tex: Option<glow::Texture>,
+    chrome_tex_size: (u32, u32),
+    chrome_pixmap: Option<Pixmap>,
 }
 
 impl GpuSurface {
@@ -128,6 +151,37 @@ impl GpuSurface {
         unsafe { wl_egl_window_resize(self.egl_window, width as i32, height as i32, 0, 0) };
         self.width = width;
         self.height = height;
+    }
+}
+
+impl Drop for GpuSurface {
+    fn drop(&mut self) {
+        // Unbind this surface if it's current, then destroy the EGL surface
+        // and the native window. Making-current with NO_SURFACE first avoids
+        // the UB of destroying a current surface.
+        unsafe {
+            if let Some(fns) = self.egl_fns.take() {
+                let surf = self.egl_surface.as_ptr();
+                let current = (fns.get_current_surface)(egl::DRAW) == surf
+                    || (fns.get_current_surface)(egl::READ) == surf;
+                if current {
+                    let _ = (fns.make_current)(
+                        self.display.as_ptr(),
+                        egl::NO_SURFACE,
+                        egl::NO_SURFACE,
+                        egl::NO_CONTEXT,
+                    );
+                }
+                let _ = (fns.destroy_surface)(self.display.as_ptr(), surf);
+            }
+            if !self.egl_window.is_null() {
+                wl_egl_window_destroy(self.egl_window);
+                self.egl_window = std::ptr::null_mut();
+            }
+        }
+        // GL chrome texture: deleting it needs a current context we may not
+        // have (the other output could be current). One leaked texture per
+        // unplugged output is acceptable; the process still owns the context.
     }
 }
 
@@ -143,11 +197,11 @@ pub struct GpuRenderer {
     config: egl::Config,
     context: egl::Context,
     /// 1x1 pbuffer used to make the context current during setup (before any
-    /// real lock surface exists). Kept alive for the renderer's lifetime —
-    /// the read is deliberate: dropping it while the context might still be
-    /// current on it is undefined behavior.
+    /// real lock surface exists). `None` when we fell back to a surfaceless
+    /// context. Kept alive for the renderer's lifetime — dropping it while
+    /// the context might still be current on it is undefined behavior.
     #[allow(dead_code)]
-    setup_surface: egl::Surface,
+    setup_surface: Option<egl::Surface>,
     gl: glow::Context,
     bg_program: glow::Program,
     chrome_program: glow::Program,
@@ -158,10 +212,6 @@ pub struct GpuRenderer {
     /// the palette color).
     white_tex: glow::Texture,
     bg_color: [f32; 4],
-    chrome_tex: glow::Texture,
-    chrome_tex_size: (u32, u32),
-    /// Reused scratch for the chrome compose.
-    chrome_pixmap: Option<Pixmap>,
     u_screen: [Option<glow::UniformLocation>; 2],
     u_uv_scale: [Option<glow::UniformLocation>; 2],
     u_uv_offset: [Option<glow::UniformLocation>; 2],
@@ -184,6 +234,7 @@ impl GpuRenderer {
         // SAFETY: the display pointer comes from our live wayland connection.
         let display = unsafe { egl.get_display(conn.display().id().as_ptr() as *mut c_void) }?;
         egl.initialize(display).ok()?;
+        egl.bind_api(egl::OPENGL_ES_API).ok()?;
         let mut configs = Vec::with_capacity(1);
         egl.choose_config(display, &EGL_ATTRIBS, &mut configs).ok()?;
         let config = *configs.first()?;
@@ -191,14 +242,23 @@ impl GpuRenderer {
             .create_context(display, config, None, &[egl::CONTEXT_CLIENT_VERSION, 2, egl::NONE])
             .ok()?;
         // A 1x1 pbuffer is enough to make the context current for setup
-        // before any real lock surface exists (pbuffers size via
-        // EGL_WIDTH/EGL_HEIGHT).
+        // before any real lock surface exists. The chosen config is
+        // WINDOW_BIT-only (more portable than also requiring PBUFFER_BIT),
+        // so pbuffer creation may fail — fall back to a surfaceless
+        // context (EGL_KHR_surfaceless_context) in that case.
         let setup_surface = egl
             .create_pbuffer_surface(display, config, &[egl::WIDTH, 1, egl::HEIGHT, 1, egl::NONE])
-            .ok()?;
-        if egl
-            .make_current(display, Some(setup_surface), Some(setup_surface), Some(context))
-            .is_err()
+            .ok();
+        let made = match setup_surface {
+            Some(s) => egl
+                .make_current(display, Some(s), Some(s), Some(context))
+                .is_ok(),
+            None => false,
+        };
+        if !made
+            && egl
+                .make_current(display, None, None, Some(context))
+                .is_err()
         {
             return None;
         }
@@ -300,16 +360,6 @@ impl GpuRenderer {
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
         }
 
-        // Full-size chrome texture (sub-image uploaded per frame).
-        let chrome_tex = unsafe { gl.create_texture() }.ok()?;
-        unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(chrome_tex));
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
-        }
-
         let bg = breadlock_ui::theme::tiny_skia_color(&palette.background);
         let bg_color = [bg.red(), bg.green(), bg.blue(), 1.0];
 
@@ -344,9 +394,6 @@ impl GpuRenderer {
             wallpaper,
             white_tex,
             bg_color,
-            chrome_tex,
-            chrome_tex_size: (0, 0),
-            chrome_pixmap: None,
             u_screen,
             u_uv_scale,
             u_uv_offset,
@@ -379,40 +426,62 @@ impl GpuRenderer {
         let egl_surface = unsafe {
             self.egl
                 .create_window_surface(self.display, self.config, egl_window as *mut c_void, None)
-        }
-        .ok()?;
+        };
+        let egl_surface = match egl_surface {
+            Ok(s) => s,
+            Err(err) => {
+                tracing::error!(%err, "eglCreateWindowSurface failed");
+                // SAFETY: we still own the native window created above.
+                unsafe { wl_egl_window_destroy(egl_window) };
+                return None;
+            }
+        };
         Some(GpuSurface {
             egl_window,
             egl_surface,
+            display: self.display,
+            egl_fns: load_egl_surface_fns(&self.egl),
             width,
             height,
+            chrome_tex: None,
+            chrome_tex_size: (0, 0),
+            chrome_pixmap: None,
         })
     }
 
     /// Renders one frame for `surface`: wallpaper quad (pan + veil in the
     /// shader), then the software-composed chrome blitted over it.
+    ///
+    /// Returns `false` if `make_current` or `swap_buffers` failed (caller
+    /// could fall back to the software path; `state.rs` currently ignores
+    /// the result and we just skip the frame).
     pub fn render_frame(
         &mut self,
         surface: &mut GpuSurface,
         inputs: &FrameInputs,
         text: &mut TextRenderer,
-    ) {
+    ) -> bool {
         let (w, h) = (surface.width, surface.height);
         if w == 0 || h == 0 {
-            return;
+            return false;
         }
         if self
             .egl
             .make_current(self.display, Some(surface.egl_surface), Some(surface.egl_surface), Some(self.context))
             .is_err()
         {
-            return;
+            tracing::warn!("eglMakeCurrent failed; skipping GPU frame");
+            return false;
         }
         let gl = &self.gl;
         unsafe { gl.viewport(0, 0, w as i32, h as i32) };
         self.draw_background(w, h, inputs);
-        self.draw_chrome(w, h, inputs, text);
-        let _ = self.egl.swap_buffers(self.display, surface.egl_surface);
+        self.draw_chrome(surface, inputs, text);
+        if self.egl.swap_buffers(self.display, surface.egl_surface).is_err() {
+            tracing::warn!("eglSwapBuffers failed; skipping GPU frame");
+            return false;
+        }
+        true
     }
 
     fn draw_background(&mut self, w: u32, h: u32, inputs: &FrameInputs) {
@@ -498,19 +567,21 @@ impl GpuRenderer {
         }
     }
 
-    fn draw_chrome(&mut self, w: u32, h: u32, inputs: &FrameInputs, text: &mut TextRenderer) {
-        let dirty = self
+    fn draw_chrome(&mut self, surface: &mut GpuSurface, inputs: &FrameInputs, text: &mut TextRenderer) {
+        let (w, h) = (surface.width, surface.height);
+        let dirty = surface
             .chrome_pixmap
             .as_ref()
             .map(|p| (p.width(), p.height()) != (w, h))
             .unwrap_or(true);
         if dirty {
-            self.chrome_pixmap = Pixmap::new(w, h);
+            surface.chrome_pixmap = Pixmap::new(w, h);
         }
-        let Some(pixmap) = self.chrome_pixmap.as_mut() else {
+        let Some(pixmap) = surface.chrome_pixmap.as_mut() else {
             return;
         };
         let rect = render::compose_chrome(pixmap, text, inputs);
+        // Empty ChromeRect is (+∞, +∞, −∞, −∞); after clamping, x1 <= x0.
         let x0 = rect.x0.max(0.0).floor() as i32;
         let y0 = rect.y0.max(0.0).floor() as i32;
         let x1 = (rect.x1.min(w as f32)).ceil() as i32;
@@ -518,10 +589,47 @@ impl GpuRenderer {
         if x1 <= x0 || y1 <= y0 {
             return;
         }
-        if self.chrome_tex_size != (w, h) {
-            let gl = &self.gl;
+
+        let gl = &self.gl;
+        if surface.chrome_tex.is_none() {
+            let tex = match unsafe { gl.create_texture() } {
+                Ok(t) => t,
+                Err(_) => return,
+            };
             unsafe {
-                gl.bind_texture(glow::TEXTURE_2D, Some(self.chrome_tex));
+                gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+                gl.tex_parameter_i32(
+                    glow::TEXTURE_2D,
+                    glow::TEXTURE_MIN_FILTER,
+                    glow::NEAREST as i32,
+                );
+                gl.tex_parameter_i32(
+                    glow::TEXTURE_2D,
+                    glow::TEXTURE_MAG_FILTER,
+                    glow::NEAREST as i32,
+                );
+                gl.tex_parameter_i32(
+                    glow::TEXTURE_2D,
+                    glow::TEXTURE_WRAP_S,
+                    glow::CLAMP_TO_EDGE as i32,
+                );
+                gl.tex_parameter_i32(
+                    glow::TEXTURE_2D,
+                    glow::TEXTURE_WRAP_T,
+                    glow::CLAMP_TO_EDGE as i32,
+                );
+            }
+            surface.chrome_tex = Some(tex);
+            surface.chrome_tex_size = (0, 0);
+        }
+        let chrome_tex = surface.chrome_tex.expect("set above");
+        if surface.chrome_tex_size != (w, h) {
+            // Allocate with zeros — `tex_image_2d(..., None)` leaves undefined
+            // texels, which ghosted when we later drew a fullscreen chrome quad
+            // after only uploading the dirty AABB.
+            let zeros = vec![0u8; w as usize * h as usize * 4];
+            unsafe {
+                gl.bind_texture(glow::TEXTURE_2D, Some(chrome_tex));
                 gl.tex_image_2d(
                     glow::TEXTURE_2D,
                     0,
@@ -531,18 +639,17 @@ impl GpuRenderer {
                     0,
                     glow::RGBA,
                     glow::UNSIGNED_BYTE,
-                    glow::PixelUnpackData::Slice(None),
+                    glow::PixelUnpackData::Slice(Some(&zeros)),
                 );
             }
-            self.chrome_tex_size = (w, h);
+            surface.chrome_tex_size = (w, h);
         }
 
         let rw = (x1 - x0) as usize;
         let rh = (y1 - y0) as usize;
         let data = pixmap.data();
-        let gl = &self.gl;
         unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.chrome_tex));
+            gl.bind_texture(glow::TEXTURE_2D, Some(chrome_tex));
             // glTexSubImage2D reads `rw` pixels contiguously per row with no
             // knowledge of the source's row stride. We're on GLES2 (where
             // GL_UNPACK_ROW_LENGTH doesn't exist), so pack the sub-rect rows
@@ -554,8 +661,8 @@ impl GpuRenderer {
             gl.tex_sub_image_2d(
                 glow::TEXTURE_2D,
                 0,
-                x0 as i32,
-                y0 as i32,
+                x0,
+                y0,
                 rw as i32,
                 rh as i32,
                 glow::RGBA,
@@ -567,9 +674,17 @@ impl GpuRenderer {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.quad_vbo));
             let wf = w as f32;
             let hf = h as f32;
+            let xf0 = x0 as f32;
+            let yf0 = y0 as f32;
+            let xf1 = x1 as f32;
+            let yf1 = y1 as f32;
+            // Quad covering *only* the current ChromeRect. A shrinking status
+            // line would otherwise ghost from leftover texels on a fullscreen
+            // chrome draw. UV still maps pixel coords → [0,1] over the full
+            // texture, so this sub-rect samples the matching texels.
             let verts: [f32; 12] = [
-                0.0, 0.0, wf, 0.0, 0.0, hf, //
-                wf, 0.0, wf, hf, 0.0, hf,
+                xf0, yf0, xf1, yf0, xf0, yf1, //
+                xf1, yf0, xf1, yf1, xf0, yf1,
             ];
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, f32s_as_bytes(&verts), glow::DYNAMIC_DRAW);
             if let Some(loc) = self.u_screen[1].as_ref() {
@@ -585,7 +700,7 @@ impl GpuRenderer {
                 gl.uniform_1_i32(Some(loc), 0);
             }
             gl.active_texture(glow::TEXTURE0);
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.chrome_tex));
+            gl.bind_texture(glow::TEXTURE_2D, Some(chrome_tex));
             gl.enable(glow::BLEND);
             gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
             gl.draw_arrays(glow::TRIANGLES, 0, 6);
@@ -615,6 +730,22 @@ fn pan_region(wp: (u32, u32), target: (u32, u32), ken_burns: bool, t_secs: f32) 
         (0.0, 0.0)
     };
     (-tx, -ty, scaled_w, scaled_h)
+}
+
+/// Resolves the EGL calls `GpuSurface::drop` needs. Function pointers, not a
+/// pointer into `GpuRenderer`, so a later move of the renderer is fine.
+fn load_egl_surface_fns(egl: &egl::DynamicInstance<egl::EGL1_4>) -> Option<EglSurfaceFns> {
+    unsafe fn load<T>(egl: &egl::DynamicInstance<egl::EGL1_4>, name: &str) -> Option<T> {
+        let p = egl.get_proc_address(name)?;
+        // SAFETY: `name` is an EGL 1.0 core entry point; the signature of `T`
+        // matches the Khronos spec. Both types are function pointers.
+        Some(std::mem::transmute_copy::<_, T>(&p))
+    }
+    Some(EglSurfaceFns {
+        destroy_surface: unsafe { load(egl, "eglDestroySurface") }?,
+        make_current: unsafe { load(egl, "eglMakeCurrent") }?,
+        get_current_surface: unsafe { load(egl, "eglGetCurrentSurface") }?,
+    })
 }
 
 /// Packs the `(x0, y0, rw, rh)` sub-rect of a `w`-wide RGBA row-major buffer
@@ -822,7 +953,7 @@ mod tests {
         let h = 720.0;
         // Software dim_rows: alpha = lerp(TOP, BOTTOM, y/h) with y=0 at top,
         // so the top of the screen gets the DEEPER dim (DIM_ALPHA_TOP).
-        assert!(DIM_ALPHA_TOP > DIM_ALPHA_BOTTOM);
+        const { assert!(DIM_ALPHA_TOP > DIM_ALPHA_BOTTOM) };
         // Shader at the very top (gl_FragCoord.y = h): row = 0 -> dim = TOP.
         assert!((shader_dim_at(h, h) - DIM_ALPHA_TOP).abs() < 1e-6);
         // Shader at the very bottom (gl_FragCoord.y = 0): row = 1 -> dim = BOTTOM.
@@ -844,6 +975,21 @@ mod tests {
     fn egl_attribs_are_none_terminated_pairs() {
         assert_eq!(EGL_ATTRIBS.len() % 2, 1, "attribs must be key/value pairs + NONE");
         assert_eq!(*EGL_ATTRIBS.last().unwrap(), egl::NONE, "attrib list must be NONE-terminated");
+        let mut saw_window = false;
+        let mut saw_es2 = false;
+        let mut saw_pbuffer = false;
+        for pair in EGL_ATTRIBS.chunks(2).filter(|c| c.len() == 2) {
+            if pair[0] == egl::SURFACE_TYPE {
+                saw_window = pair[1] & egl::WINDOW_BIT as egl::Int != 0;
+                saw_pbuffer = pair[1] & egl::PBUFFER_BIT as egl::Int != 0;
+            }
+            if pair[0] == egl::RENDERABLE_TYPE {
+                saw_es2 = pair[1] & egl::OPENGL_ES2_BIT as egl::Int != 0;
+            }
+        }
+        assert!(saw_window, "config must request WINDOW_BIT");
+        assert!(!saw_pbuffer, "do not require PBUFFER_BIT (not portable)");
+        assert!(saw_es2, "config must request EGL_OPENGL_ES2_BIT");
     }
 
     #[test]
@@ -867,7 +1013,7 @@ mod tests {
         }
         // Take the 2x1 rect at (1, 0).
         let packed = pack_rows(&data, 4, 1, 0, 2, 1);
-        assert_eq!(packed.len(), 2 * 1 * 4);
+        assert_eq!(packed.len(), 8);
         assert_eq!(packed[0], 1);
         assert_eq!(packed[4], 2);
         // Two rows: the second row must NOT be shifted by (w - rw) — the bug.

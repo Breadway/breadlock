@@ -15,6 +15,7 @@
 //! calls compositor `unlock()` — that stays on the PAM path.
 
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use bread_utils::bread_client::{BreadClient, BreadEvent, Subscription};
@@ -28,6 +29,26 @@ pub const APP_ID: &str = "lock";
 /// Distinct singleton for `breadlock listen` so a listen process and a
 /// locker process can coexist. The locker itself uses [`APP_ID`].
 pub const LISTEN_APP: &str = "lock-listen";
+
+/// Set for the life of `run_lock` so [`locker_is_running`] is true without
+/// a second `try_acquire("lock")` from the locker process (flock is
+/// per-process, so that check would miss ourselves).
+static LOCKER_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// RAII flag: [`locker_is_running`] is true until this drops.
+pub struct LockerRunningGuard;
+
+impl Drop for LockerRunningGuard {
+    fn drop(&mut self) {
+        LOCKER_RUNNING.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Mark this process as the locker for the life of the returned guard.
+pub fn enter_lock_process() -> LockerRunningGuard {
+    LOCKER_RUNNING.store(true, Ordering::SeqCst);
+    LockerRunningGuard
+}
 
 pub fn emit_locked() {
     BreadClient::connect(APP_ID).emit("bread.lock.locked", serde_json::json!({}));
@@ -59,11 +80,10 @@ pub fn emit_unlock_failed(error: &str) {
     );
 }
 
-/// True when another process holds the locker singleton — i.e. breadlock
-/// is already locking this session. A `try_acquire` that succeeds is
-/// released immediately; this is a check, not a claim.
+/// True when this process is the locker, or another process holds the
+/// locker singleton — i.e. breadlock is already locking this session.
 pub fn locker_is_running() -> bool {
-    singleton_held(APP_ID)
+    LOCKER_RUNNING.load(Ordering::SeqCst) || singleton_held(APP_ID)
 }
 
 fn singleton_held(app: &str) -> bool {
@@ -81,6 +101,8 @@ pub fn start_locker() -> Result<(), String> {
     let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("breadlock"));
     let mut child = Command::new(exe)
         .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("failed to start breadlock: {e}"))?;
     thread::spawn(move || {
@@ -94,7 +116,7 @@ pub fn start_locker() -> Result<(), String> {
 /// `ext-session-lock-v1` has been accepted — wait on `bread.lock.locked`
 /// for the compositor confirmation.
 pub fn honor_lock_command() {
-    honor_lock_command_with(start_locker);
+    honor_lock_command_with(locker_is_running(), start_locker);
 }
 
 /// Session-level unlock (`loginctl unlock-session` on the caller's
@@ -122,8 +144,8 @@ pub fn honor_unlock_command() {
     honor_unlock_command_with(locker_is_running(), unlock_session);
 }
 
-fn honor_lock_command_with(start: impl FnOnce() -> Result<(), String>) {
-    if locker_is_running() {
+fn honor_lock_command_with(locked: bool, start: impl FnOnce() -> Result<(), String>) {
+    if locked {
         tracing::info!("bread.command.lock.lock: already locked");
         emit_lock_done();
         return;
@@ -160,12 +182,16 @@ fn honor_unlock_command_with(locked: bool, unlock: impl FnOnce() -> Result<(), S
 
 /// Reacts to `bread.command.lock.*`. Unknown verbs are ignored, not stubbed.
 pub fn handle_command(event: &BreadEvent) {
+    handle_command_with(event, honor_lock_command, honor_unlock_command);
+}
+
+fn handle_command_with(event: &BreadEvent, on_lock: impl FnOnce(), on_unlock: impl FnOnce()) {
     let Some(verb) = event.event.strip_prefix("bread.command.lock.") else {
         return;
     };
     match verb {
-        "lock" => honor_lock_command(),
-        "unlock" => honor_unlock_command(),
+        "lock" => on_lock(),
+        "unlock" => on_unlock(),
         other => tracing::info!(verb = other, "ignoring unknown bread.command.lock verb"),
     }
 }
@@ -181,6 +207,7 @@ pub fn subscribe_commands() -> Subscription {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     fn event(name: &str) -> BreadEvent {
         BreadEvent {
@@ -192,9 +219,48 @@ mod tests {
 
     #[test]
     fn handle_command_ignores_unrecognized_verb() {
-        handle_command(&event("bread.command.lock.pin"));
-        handle_command(&event("bread.command.clip.clear"));
-        handle_command(&event("bread.lock.locked"));
+        let lock = Cell::new(false);
+        let unlock = Cell::new(false);
+        handle_command_with(
+            &event("bread.command.lock.pin"),
+            || lock.set(true),
+            || unlock.set(true),
+        );
+        handle_command_with(
+            &event("bread.command.clip.clear"),
+            || lock.set(true),
+            || unlock.set(true),
+        );
+        handle_command_with(
+            &event("bread.lock.locked"),
+            || lock.set(true),
+            || unlock.set(true),
+        );
+        assert!(!lock.get());
+        assert!(!unlock.get());
+    }
+
+    #[test]
+    fn handle_command_dispatches_only_lock_and_unlock() {
+        let lock = Cell::new(0u32);
+        let unlock = Cell::new(0u32);
+        handle_command_with(
+            &event("bread.command.lock.lock"),
+            || lock.set(lock.get() + 1),
+            || unlock.set(unlock.get() + 1),
+        );
+        handle_command_with(
+            &event("bread.command.lock.unlock"),
+            || lock.set(lock.get() + 1),
+            || unlock.set(unlock.get() + 1),
+        );
+        handle_command_with(
+            &event("bread.command.lock.pin"),
+            || lock.set(lock.get() + 1),
+            || unlock.set(unlock.get() + 1),
+        );
+        assert_eq!(lock.get(), 1);
+        assert_eq!(unlock.get(), 1);
     }
 
     #[test]
@@ -216,13 +282,33 @@ mod tests {
     }
 
     #[test]
-    fn honor_lock_command_with_failed_start_does_not_panic() {
-        honor_lock_command_with(|| Err("boom".into()));
+    fn honor_lock_command_with_failed_start_runs_start() {
+        let started = Cell::new(false);
+        honor_lock_command_with(false, || {
+            started.set(true);
+            Err("boom".into())
+        });
+        assert!(started.get());
     }
 
     #[test]
-    fn honor_lock_command_with_successful_start_does_not_panic() {
-        honor_lock_command_with(|| Ok(()));
+    fn honor_lock_command_with_successful_start_runs_start() {
+        let started = Cell::new(false);
+        honor_lock_command_with(false, || {
+            started.set(true);
+            Ok(())
+        });
+        assert!(started.get());
+    }
+
+    #[test]
+    fn honor_lock_command_already_locked_does_not_start() {
+        let started = Cell::new(false);
+        honor_lock_command_with(true, || {
+            started.set(true);
+            Ok(())
+        });
+        assert!(!started.get());
     }
 
     #[test]
@@ -236,12 +322,33 @@ mod tests {
     }
 
     #[test]
-    fn honor_unlock_command_with_failed_loginctl_does_not_panic() {
-        honor_unlock_command_with(true, || Err("boom".into()));
+    fn honor_unlock_command_with_failed_loginctl_runs_unlock() {
+        let called = Cell::new(false);
+        honor_unlock_command_with(true, || {
+            called.set(true);
+            Err("boom".into())
+        });
+        assert!(called.get());
     }
 
     #[test]
-    fn honor_unlock_command_with_successful_loginctl_does_not_panic() {
-        honor_unlock_command_with(true, || Ok(()));
+    fn honor_unlock_command_with_successful_loginctl_runs_unlock() {
+        let called = Cell::new(false);
+        honor_unlock_command_with(true, || {
+            called.set(true);
+            Ok(())
+        });
+        assert!(called.get());
+    }
+
+    #[test]
+    fn enter_lock_process_makes_locker_is_running_true_without_singleton() {
+        let app = format!("breadlock-test-running-flag-{}", std::process::id());
+        assert!(!singleton_held(&app));
+        {
+            let _g = enter_lock_process();
+            assert!(LOCKER_RUNNING.load(Ordering::SeqCst));
+        }
+        assert!(!LOCKER_RUNNING.load(Ordering::SeqCst));
     }
 }
