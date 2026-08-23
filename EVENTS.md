@@ -30,22 +30,23 @@ from session lock/unlock.
 | `bread.lock.unlocked` | `{}` | PAM authenticated successfully and breadlock sent `unlock` to the compositor, **or** the compositor ended an already-active lock (`SessionLockHandler::finished` after `locked` — breadlock sends `unlock_and_destroy` then emits this). Not emitted when the lock was never acquired (`finished` before `locked`), on a dispatch-error exit (fail-secure: the session stays locked), or a failed/typo password. |
 | `bread.lock.lock.done` | `{}` | `bread.command.lock.lock` was honored: the locker was already running, or a locker process was started (same no-args invocation as hypridle's `lock_cmd = breadlock`). This is the command confirmation, not compositor proof — wait on `bread.lock.locked` if you need the session-lock protocol to have completed. |
 | `bread.lock.lock.failed` | `{ "error": "<message>" }` | `bread.command.lock.lock` was received but the locker could not be started (e.g. this binary is missing from disk). |
-| `bread.lock.unlock.done` | `{}` | `bread.command.lock.unlock` was honored: no locker was running (already unlocked), or `loginctl unlock-session` was invoked for this session. This is the command confirmation, not compositor proof — wait on `bread.lock.unlocked` if you need PAM + `ext-session-lock-v1` unlock. |
-| `bread.lock.unlock.failed` | `{ "error": "<message>" }` | `bread.command.lock.unlock` was received but `loginctl unlock-session` could not be run (binary missing, non-zero exit). |
+| `bread.lock.unlock.done` | `{}` | `bread.command.lock.unlock` was honored because no locker was running (session already unlocked). This is **not** passwordless compositor unlock and is **not** emitted merely because a bus client asked to unlock. For PAM + `ext-session-lock-v1` unlock, wait on `bread.lock.unlocked`. |
+| `bread.lock.unlock.failed` | `{ "error": "<message>" }` | `bread.command.lock.unlock` was received while the locker is running. The bus cannot bypass PAM; authenticate at the lock screen. |
 
 ## Commands honored (`bread.command.lock.*`)
 
 | Verb | Effect |
 |------|--------|
 | `lock` | If a locker is already running, emit `bread.lock.lock.done` and do nothing else. Otherwise start `breadlock` the same way hypridle does (`lock_cmd = breadlock`: this binary, no args) and emit `done` or `failed`. |
-| `unlock` | If no locker is running, emit `bread.lock.unlock.done` (already unlocked). Otherwise run `loginctl unlock-session` on the caller's session and emit `done` or `failed`. This is session-level (logind), not a passwordless PAM bypass: breadlock does not call compositor `unlock()` for this verb. |
+| `unlock` | If no locker is running, emit `bread.lock.unlock.done` (already unlocked) and do **not** call loginctl. If the locker is running, emit `bread.lock.unlock.failed` — bus clients must never trigger unlock. Compositor `unlock()` stays on the PAM path only. |
 
 A Lua workflow that wants the session locked should `bread.wait` /
 `bread.wait_any` on `bread.lock.lock.done` (or `.failed`) with a timeout.
 To know the compositor actually locked, wait on `bread.lock.locked`.
-The same pattern applies to unlock: wait on `bread.lock.unlock.done` /
-`.failed` for the command, and on `bread.lock.unlocked` for PAM +
-compositor unlock.
+Unlock from the bus is not a substitute for PAM: wait on
+`bread.lock.unlock.done` / `.failed` for the command ack (`.done` only
+means already unlocked), and on `bread.lock.unlocked` for a typed
+password + compositor unlock.
 
 ### Who is listening
 
@@ -60,8 +61,8 @@ rule). Two subscribers exist:
    idempotent `done`.
 2. **The locker process** — always subscribes once the lock screen is
    up, so `lock` during an active lock is an idempotent `done`, and
-   `unlock` runs `loginctl unlock-session` rather than compositor
-   `unlock()`.
+   `unlock` is `.failed` (cannot bypass PAM). Never compositor
+   `unlock()`, never `loginctl unlock-session`.
 
 ### Session-level equivalent
 
@@ -72,11 +73,11 @@ bread command bus. It is the session-level equivalent of
 same `ext-session-lock-v1` request. Prefer `loginctl lock-session`
 from a keybind; prefer the bus command from a Lua workflow.
 
-`loginctl unlock-session` is the matching session-level unlock. The
-bus verb invokes that same command. Compositor unlock after a typed
-password is still PAM on this process (`bread.lock.unlocked`); a
-dispatch-error or crash path still does **not** call compositor
-`unlock()` (fail-secure).
+The bus unlock verb does **not** call `loginctl unlock-session` and
+does **not** replace PAM. Super+L / hypridle remain `loginctl
+lock-session`. Compositor unlock after a typed password is still PAM
+on this process (`bread.lock.unlocked`); a dispatch-error or crash
+path still does **not** call compositor `unlock()` (fail-secure).
 
 ### Not implemented: `pin` / `blur`
 

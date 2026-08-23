@@ -10,9 +10,10 @@
 //! locked (already-locked is `bread.lock.lock.done`). `breadlock listen`
 //! is the unlocked-path subscriber: it starts this same binary the way
 //! hypridle's `lock_cmd = breadlock` does, and treats unlock as already
-//! unlocked (`bread.lock.unlock.done`). Session-level equivalents are
-//! `loginctl lock-session` / `loginctl unlock-session`. Unlock never
-//! calls compositor `unlock()` — that stays on the PAM path.
+//! unlocked (`bread.lock.unlock.done`). If the locker is running, unlock
+//! is `bread.lock.unlock.failed` — only PAM at the lock screen may
+//! unlock. Super+L / hypridle remain `loginctl lock-session`. Bus unlock
+//! never calls compositor `unlock()` or `loginctl unlock-session`.
 
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -119,29 +120,16 @@ pub fn honor_lock_command() {
     honor_lock_command_with(locker_is_running(), start_locker);
 }
 
-/// Session-level unlock (`loginctl unlock-session` on the caller's
-/// session). Does not send compositor `unlock` and does not skip PAM —
-/// that stays on the typed-password path. `done` means the command was
-/// acted on (or the session was already unlocked), not that
-/// `ext-session-lock-v1` has been released — wait on
-/// `bread.lock.unlocked` for the compositor confirmation.
-fn unlock_session() -> Result<(), String> {
-    let status = Command::new("loginctl")
-        .arg("unlock-session")
-        .stdin(Stdio::null())
-        .status()
-        .map_err(|e| format!("failed to run loginctl unlock-session: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("loginctl unlock-session exited with {status}"))
-    }
-}
+/// Payload on `bread.lock.unlock.failed` while the locker is running.
+/// Bus clients cannot unlock; only PAM at the lock screen can.
+const UNLOCK_REFUSED_WHILE_LOCKED: &str =
+    "bus unlock cannot bypass PAM; authenticate at the lock screen";
 
-/// Honor `bread.command.lock.unlock`: already unlocked is success;
-/// otherwise ask logind to unlock this session.
+/// Honor `bread.command.lock.unlock`. Fail-secure: never compositor
+/// `unlock()`, never `loginctl unlock-session`. Already unlocked is
+/// `.done`; a running locker is `.failed`.
 pub fn honor_unlock_command() {
-    honor_unlock_command_with(locker_is_running(), unlock_session);
+    honor_unlock_command_with(locker_is_running(), emit_unlock_done, emit_unlock_failed);
 }
 
 fn honor_lock_command_with(locked: bool, start: impl FnOnce() -> Result<(), String>) {
@@ -162,22 +150,21 @@ fn honor_lock_command_with(locked: bool, start: impl FnOnce() -> Result<(), Stri
     }
 }
 
-fn honor_unlock_command_with(locked: bool, unlock: impl FnOnce() -> Result<(), String>) {
+fn honor_unlock_command_with(
+    locked: bool,
+    emit_done: impl FnOnce(),
+    emit_failed: impl FnOnce(&str),
+) {
     if !locked {
         tracing::info!("bread.command.lock.unlock: already unlocked");
-        emit_unlock_done();
+        emit_done();
         return;
     }
-    match unlock() {
-        Ok(()) => {
-            tracing::info!("bread.command.lock.unlock: loginctl unlock-session");
-            emit_unlock_done();
-        }
-        Err(error) => {
-            tracing::error!(%error, "bread.command.lock.unlock: failed");
-            emit_unlock_failed(&error);
-        }
-    }
+    tracing::error!(
+        error = UNLOCK_REFUSED_WHILE_LOCKED,
+        "bread.command.lock.unlock: refused while locked"
+    );
+    emit_failed(UNLOCK_REFUSED_WHILE_LOCKED);
 }
 
 /// Reacts to `bread.command.lock.*`. Unknown verbs are ignored, not stubbed.
@@ -312,33 +299,36 @@ mod tests {
     }
 
     #[test]
-    fn honor_unlock_command_already_unlocked_does_not_call_loginctl() {
-        let called = std::cell::Cell::new(false);
-        honor_unlock_command_with(false, || {
-            called.set(true);
-            Err("should not run".into())
-        });
-        assert!(!called.get());
+    fn honor_unlock_command_already_unlocked_emits_done() {
+        let done = Cell::new(false);
+        let failed = Cell::new(false);
+        honor_unlock_command_with(false, || done.set(true), |_| failed.set(true));
+        assert!(done.get());
+        assert!(!failed.get());
     }
 
     #[test]
-    fn honor_unlock_command_with_failed_loginctl_runs_unlock() {
-        let called = Cell::new(false);
-        honor_unlock_command_with(true, || {
-            called.set(true);
-            Err("boom".into())
-        });
-        assert!(called.get());
+    fn honor_unlock_command_while_locked_emits_failed_not_done() {
+        let done = Cell::new(false);
+        let failed = Cell::new(false);
+        honor_unlock_command_with(
+            true,
+            || done.set(true),
+            |e| {
+                assert_eq!(e, UNLOCK_REFUSED_WHILE_LOCKED);
+                failed.set(true);
+            },
+        );
+        assert!(!done.get());
+        assert!(failed.get());
     }
 
     #[test]
-    fn honor_unlock_command_with_successful_loginctl_runs_unlock() {
-        let called = Cell::new(false);
-        honor_unlock_command_with(true, || {
-            called.set(true);
-            Ok(())
-        });
-        assert!(called.get());
+    fn honor_unlock_command_while_locked_error_mentions_pam() {
+        assert!(
+            UNLOCK_REFUSED_WHILE_LOCKED.contains("PAM"),
+            "bus unlock refusal must say it cannot bypass PAM, got {UNLOCK_REFUSED_WHILE_LOCKED:?}"
+        );
     }
 
     #[test]

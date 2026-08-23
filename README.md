@@ -17,11 +17,13 @@ honors `bread.command.lock.lock` / `bread.command.lock.unlock` (emits
 `bread.lock.lock.done` / `.failed` and `bread.lock.unlock.done` /
 `.failed`). Run `breadlock listen` so both commands work while
 unlocked; the locker also subscribes while the session is locked.
-Unlock is `loginctl unlock-session` at the session level — not a
-passwordless compositor `unlock()`. Super+L remains
-`loginctl lock-session` (hypridle then runs `breadlock`). See
-[EVENTS.md](EVENTS.md). `breadgreet` is not on the bus. There is no
-`bakery.toml` (PAM / pacman exception).
+Unlock is fail-secure: already-unlocked acks `bread.lock.unlock.done`;
+a running locker refuses with `bread.lock.unlock.failed` (only PAM at
+the lock screen unlocks). The bus never calls compositor `unlock()` or
+`loginctl unlock-session`. Super+L remains `loginctl lock-session`
+(hypridle then runs `breadlock`). See [EVENTS.md](EVENTS.md).
+`breadgreet` is not on the bus. There is no `bakery.toml` (PAM /
+pacman exception).
 
 ## Architecture
 
@@ -89,8 +91,10 @@ lock_cmd = breadlock
 `bread.command.lock.lock` and `bread.command.lock.unlock`. It is not
 started by hypridle; add it to session startup
 (`exec-once = breadlock listen`) if a Lua workflow should be able to
-lock or unlock the session while it is unlocked. Session-level unlock
-is `loginctl unlock-session` (the bus verb runs that).
+lock the session while it is unlocked, or to ack already-unlocked.
+`bread.command.lock.unlock` does not replace PAM and does not run
+`loginctl unlock-session`. Super+L / hypridle remain
+`loginctl lock-session`.
 
 ## Verification (why this is safe to test without a lockout risk)
 
