@@ -1,7 +1,7 @@
 # Maintainer: Breadway <plasticbread849@gmail.com>
 
 pkgname=breadlock
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Session locker and greetd greeter for Hyprland / Wayland"
 arch=('x86_64')
@@ -15,15 +15,18 @@ depends=('pam' 'wayland' 'libxkbcommon' 'gtk4')
 optdepends=(
   'cage: minimal Wayland compositor to host breadgreet under greetd'
   'hyprland: the session breadlock protects and breadgreet launches'
+  'upower: battery line on the lock screen'
 )
 makedepends=('rust' 'cargo')
+backup=('etc/pam.d/breadlock')
 source=("${pkgname}-${pkgver}.tar.gz")
 sha256sums=('SKIP')
 
 build() {
   cd "${srcdir}/${pkgname}-${pkgver}"
   # --bin (not -p breadlock) deliberately excludes the breadlock-auth-check
-  # dev harness, which shares the breadlock package but isn't installed.
+  # and breadlock-preview dev harnesses, which share the breadlock package
+  # but aren't installed.
   cargo build --release --locked --bin breadlock --bin breadgreet
 }
 

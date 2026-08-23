@@ -34,8 +34,7 @@ jobs:
           sed -i "s/^pkgver=.*/pkgver=${VERSION}/" packaging/arch/PKGBUILD
           sed -i "s/^sha256sums=.*/sha256sums=('${SHA}')/" packaging/arch/PKGBUILD
           chown -R builder:builder /home/builder/src
-          # --nocheck: packaging builds the artifact; tests belong in a CI job.
-          su builder -c "cd /home/builder/src/packaging/arch && makepkg -f --noconfirm --nocheck"
+          su builder -c "cd /home/builder/src/packaging/arch && makepkg -f --noconfirm"
           PKG=$(find /home/builder/src/packaging/arch -name '*.pkg.tar.zst' | head -1)
           mkdir -p /tmp/breadlock-pkg
           cp "$PKG" /tmp/breadlock-pkg/
