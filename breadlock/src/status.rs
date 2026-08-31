@@ -124,7 +124,10 @@ fn poll_now_playing_on(conn: &zbus::blocking::Connection) -> Result<String, ()> 
         .map_err(|_| ())?;
 
     let mut paused: Option<String> = None;
-    for name in names.iter().filter(|n| n.starts_with("org.mpris.MediaPlayer2.")) {
+    for name in names
+        .iter()
+        .filter(|n| n.starts_with("org.mpris.MediaPlayer2."))
+    {
         let Some((status, title, artist)) = read_player(conn, name) else {
             continue;
         };
@@ -160,7 +163,10 @@ fn read_player(
         .to_string();
     let mut title = None;
     let mut artist = None;
-    if let Some(metadata) = dict.get("Metadata").and_then(|v| v.downcast_ref::<Dict>().ok()) {
+    if let Some(metadata) = dict
+        .get("Metadata")
+        .and_then(|v| v.downcast_ref::<Dict>().ok())
+    {
         title = metadata
             .get::<&str, &str>(&"xesam:title")
             .ok()
@@ -194,12 +200,8 @@ fn read_player(
 /// capped; a Playing player with neither still yields the player name (or
 /// `"Playing"`) so it is not outranked by a later titled Paused player.
 fn format_now_playing(title: Option<&str>, artist: Option<&str>, player: &str) -> String {
-    let title = title
-        .map(sanitize_mpris_field)
-        .filter(|s| !s.is_empty());
-    let artist = artist
-        .map(sanitize_mpris_field)
-        .filter(|s| !s.is_empty());
+    let title = title.map(sanitize_mpris_field).filter(|s| !s.is_empty());
+    let artist = artist.map(sanitize_mpris_field).filter(|s| !s.is_empty());
     let line = match (title, artist) {
         (Some(t), Some(a)) => format!("{t} — {a}"),
         (Some(t), None) => t,
@@ -253,7 +255,11 @@ fn poll_battery_on(conn: &zbus::blocking::Connection) -> Result<String, ()> {
             "GetDisplayDevice",
             &(),
         )
-        .and_then(|reply| reply.body().deserialize::<zbus::zvariant::OwnedObjectPath>())
+        .and_then(|reply| {
+            reply
+                .body()
+                .deserialize::<zbus::zvariant::OwnedObjectPath>()
+        })
         .map_err(|_| ())?;
     let props = conn
         .call_method(
@@ -263,11 +269,7 @@ fn poll_battery_on(conn: &zbus::blocking::Connection) -> Result<String, ()> {
             "GetAll",
             &("org.freedesktop.UPower.Device",),
         )
-        .and_then(|reply| {
-            reply
-                .body()
-                .deserialize::<HashMap<String, OwnedValue>>()
-        })
+        .and_then(|reply| reply.body().deserialize::<HashMap<String, OwnedValue>>())
         .map_err(|_| ())?;
     // DisplayDevice always exists; without a battery IsPresent is false
     // and Percentage is often 0. Missing IsPresent is treated as absent.

@@ -213,7 +213,14 @@ impl TextRenderer {
         origin_y: f32,
     ) {
         self.draw_line_weighted(
-            pixmap, text, family, size_px, color, origin_x, origin_y, Weight::NORMAL,
+            pixmap,
+            text,
+            family,
+            size_px,
+            color,
+            origin_x,
+            origin_y,
+            Weight::NORMAL,
         );
     }
 
@@ -317,9 +324,8 @@ fn blend_over(pixmap: &mut Pixmap, x: u32, y: u32, r: u8, g: u8, b: u8, a: u8) {
     // out_a = sa + da*(255-sa)/255; out_rgb = src_rgb*sa/255 + dst_rgb*(1-sa).
     let da = dst.alpha() as u32;
     let out_a = (sa + da * (255 - sa) / 255) as u8;
-    let out_c = |c: u8, dc: u8| -> u8 {
-        (c as u32 * sa / 255 + dc as u32 * (255 - sa) / 255) as u8
-    };
+    let out_c =
+        |c: u8, dc: u8| -> u8 { (c as u32 * sa / 255 + dc as u32 * (255 - sa) / 255) as u8 };
     if let Some(blended) = PremultipliedColorU8::from_rgba(
         out_c(r, dst.red()),
         out_c(g, dst.green()),
@@ -386,7 +392,10 @@ mod tests {
             0.0,
         );
         let full_max = full.pixels().iter().map(|p| p.red()).max().unwrap();
-        assert!(full_max > 200, "full-alpha text should render bright, got {full_max}");
+        assert!(
+            full_max > 200,
+            "full-alpha text should render bright, got {full_max}"
+        );
 
         let faint = tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, 0.1).unwrap();
         let mut low = Pixmap::new(200, 40).unwrap();
@@ -439,10 +448,7 @@ mod tests {
         // Full-coverage glyph cores are legitimately opaque, but the AA
         // edges must carry real intermediate alphas — the old forced-255
         // blend made *every* drawn pixel (edges included) fully opaque.
-        let has_edge = t
-            .pixels()
-            .iter()
-            .any(|p| p.alpha() > 0 && p.alpha() < 255);
+        let has_edge = t.pixels().iter().any(|p| p.alpha() > 0 && p.alpha() < 255);
         assert!(
             has_edge,
             "glyph AA edges must keep intermediate alphas onto a transparent pixmap"

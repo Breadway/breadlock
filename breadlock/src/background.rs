@@ -177,7 +177,21 @@ fn blit_translate(target: &mut Pixmap, src: &Pixmap, dx: f32, dy: f32, bilinear:
             let di = (drow + col) * 4;
             // SAFETY: i01/i11 are the next column (col + 1 < tw, in bounds);
             // di + 4 < target size; rows in bounds per above.
-            unsafe { lerp4(sdata, i00, i10, i00 + 4, i10 + 4, di, wx, wx_inv, wy, wy_inv, dst) };
+            unsafe {
+                lerp4(
+                    sdata,
+                    i00,
+                    i10,
+                    i00 + 4,
+                    i10 + 4,
+                    di,
+                    wx,
+                    wx_inv,
+                    wy,
+                    wy_inv,
+                    dst,
+                )
+            };
         }
         // Last column of this row: clamp x1.
         let i00 = (r0 + ix + tw - 1) * 4;
@@ -198,7 +212,21 @@ fn blit_translate(target: &mut Pixmap, src: &Pixmap, dx: f32, dy: f32, bilinear:
         let i10 = (r1 + ix + col) * 4;
         let di = (drow + col) * 4;
         // SAFETY: in bounds as in the interior loop.
-        unsafe { lerp4(sdata, i00, i10, i00 + 4, i10 + 4, di, wx, wx_inv, wy, wy_inv, dst) };
+        unsafe {
+            lerp4(
+                sdata,
+                i00,
+                i10,
+                i00 + 4,
+                i10 + 4,
+                di,
+                wx,
+                wx_inv,
+                wy,
+                wy_inv,
+                dst,
+            )
+        };
     }
     // Last column of the last row (both clamps).
     let i00 = (r0 + ix + tw - 1) * 4;
@@ -339,7 +367,12 @@ impl Background {
                         -scaled.pan_y * (0.5 + 0.5 * phase.cos()),
                     )
                 } else {
-                    (0.0, 0.0)
+                    // Static wallpaper: center the crop. The source is scaled
+                    // to cover-fit (larger than the target on at least one
+                    // axis) and `blit_translate` samples the region that
+                    // starts at `-tx`, so centering means starting the sample
+                    // window at half the overhang on each axis.
+                    (-scaled.pan_x * 0.5, -scaled.pan_y * 0.5)
                 };
                 // The cached pixmap is already output-sized, so this per-frame
                 // draw is a 1:1 copy with at most a translation. `draw_pixmap`
@@ -410,6 +443,49 @@ mod tests {
     }
 
     #[test]
+    fn blit_translate_positive_offset_clamps_to_source_start() {
+        // A positive offset shifts the window before the source's origin and
+        // must clamp up, showing the top-left of the source rather than
+        // reading before the buffer or leaving holes.
+        let src = source_grid();
+        let mut dst = Pixmap::new(2, 2).unwrap();
+        blit_translate(&mut dst, &src, 5.0, 5.0, false);
+        let px = dst.pixels();
+        assert_eq!(px[0].red(), 0, "positive dx clamps to src(0,0) red");
+        assert_eq!(px[0].green(), 0, "positive dy clamps to src(0,0) green");
+        assert_eq!(px[3].red(), 63, "(1,1) is src(1,1) red");
+        assert_eq!(px[3].green(), 63);
+    }
+
+    #[test]
+    fn blit_translate_clamps_each_axis_independently() {
+        // dx over-clamps to the left edge while dy lands inside the source's
+        // overhang, so the visible window is src[x 0..2, y 2..4] — each axis
+        // must clamp in isolation.
+        let src = source_grid();
+        let mut dst = Pixmap::new(2, 2).unwrap();
+        blit_translate(&mut dst, &src, 5.0, -3.0, false);
+        let px = dst.pixels();
+        assert_eq!(px[0].red(), 0, "x clamps to source column 0");
+        assert_eq!(px[0].green(), 126, "y window starts at source row 2");
+        assert_eq!(px[3].red(), 63, "(1,1) is src(1,3) red");
+        assert_eq!(px[3].green(), 189);
+    }
+
+    #[test]
+    fn blit_translate_exact_fit_is_identity() {
+        // Equal sizes with zero offset is a plain copy.
+        let src = source_grid();
+        let mut dst = Pixmap::new(4, 4).unwrap();
+        blit_translate(&mut dst, &src, 0.0, 0.0, false);
+        assert_eq!(
+            dst.data(),
+            src.data(),
+            "zero offset at equal size is a copy"
+        );
+    }
+
+    #[test]
     fn ken_burns_pan_never_exposes_edges() {
         // A small solid-color image panned through a full cycle must cover
         // the whole target at every phase — no black borders.
@@ -424,7 +500,10 @@ mod tests {
         for i in 0..90 {
             bg.paint(&mut target, i as f32, true);
             assert!(
-                target.pixels().iter().all(|p| p.red() == 200 && p.green() == 30),
+                target
+                    .pixels()
+                    .iter()
+                    .all(|p| p.red() == 200 && p.green() == 30),
                 "frame {i} exposed an edge"
             );
         }
@@ -461,7 +540,86 @@ mod tests {
         });
         let mut target = Pixmap::new(60, 30).unwrap();
         bg.paint(&mut target, 0.0, true);
-        assert!(target.pixels().iter().all(|p| p.red() == 200 && p.green() == 30));
+        assert!(target
+            .pixels()
+            .iter()
+            .all(|p| p.red() == 200 && p.green() == 30));
+    }
+
+    #[test]
+    fn static_image_crop_is_centered_not_top_left() {
+        // Regression: a static (non-Ken-Burns) cover-fit image used to render
+        // the crop anchored at the source's top-left. Here the target is wider
+        // than it is tall, so the cover-fit layer overhangs vertically. The
+        // visible region must be centered (matching the GPU path and
+        // breadgreet), i.e. started at half the overhang.
+        //
+        // Source 32x16, target 32x12 -> cover scale 1.0, scaled 32x16,
+        // pan_y = 4, so the visible window is rows 2..14 when centered but
+        // rows 0..12 when top-left anchored. A red band in rows 12..16 is
+        // therefore visible only in the centered crop (rows 12, 13 are within
+        // 2..14 but outside 0..12), so this fails against the old top-left
+        // anchoring.
+        let mut source = Pixmap::new(32, 16).unwrap();
+        source.fill(tiny_skia::Color::from_rgba8(255, 220, 0, 255)); // yellow
+        for y in 12..16 {
+            for x in 0..32 {
+                source.pixels_mut()[y * 32 + x] =
+                    tiny_skia::PremultipliedColorU8::from_rgba(255, 0, 0, 255).unwrap();
+            }
+        }
+        let bg = Background::Image(ImageBg {
+            source,
+            ken_burns: false,
+            cache: RefCell::new(Vec::new()),
+        });
+
+        let mut target = Pixmap::new(32, 12).unwrap();
+        bg.paint(&mut target, 0.0, false); // integer offset -> pixel-exact memcpy
+
+        // Centered window rows 2..14 includes the red band rows 12..16; a
+        // top-left window (0..12) would show none.
+        assert!(
+            target
+                .pixels()
+                .iter()
+                .any(|p| p.red() == 255 && p.green() == 0),
+            "centered crop should include the bottom red band; first row {:?}",
+            target.pixels()[0]
+        );
+    }
+
+    #[test]
+    fn static_image_crop_is_horizontally_centered() {
+        // Complementary to the vertical test above: a wide source and a
+        // equal-height target overhang horizontally. Centering puts the
+        // visible window at source columns 8..24 (into a 16px target) whereas
+        // a top-left anchor would use columns 0..16. A red band in columns
+        // 16..24 is therefore only visible in the centered crop.
+        let mut source = Pixmap::new(32, 8).unwrap();
+        source.fill(tiny_skia::Color::from_rgba8(255, 220, 0, 255)); // yellow
+        for x in 16..24 {
+            for y in 0..8 {
+                source.pixels_mut()[y * 32 + x] =
+                    tiny_skia::PremultipliedColorU8::from_rgba(255, 0, 0, 255).unwrap();
+            }
+        }
+        let bg = Background::Image(ImageBg {
+            source,
+            ken_burns: false,
+            cache: RefCell::new(Vec::new()),
+        });
+
+        let mut target = Pixmap::new(16, 8).unwrap();
+        bg.paint(&mut target, 0.0, false); // integer offset -> pixel-exact memcpy
+
+        assert!(
+            target
+                .pixels()
+                .iter()
+                .any(|p| p.red() == 255 && p.green() == 0),
+            "centered crop should include the right red band"
+        );
     }
 
     #[test]

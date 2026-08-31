@@ -107,7 +107,10 @@ mod tests {
     fn defaults_match_design_system() {
         let a = Appearance::default();
         assert_eq!(a.background.mode, BackgroundMode::Color);
-        assert!(!a.background.ken_burns, "Ken Burns must be opt-in (CPU cost)");
+        assert!(
+            !a.background.ken_burns,
+            "Ken Burns must be opt-in (CPU cost)"
+        );
         assert_eq!(a.clock.format, "%H:%M");
         assert_eq!(a.clock.date_format, "%A · %b %d");
         assert_eq!(a.font.family, "Varela Round");

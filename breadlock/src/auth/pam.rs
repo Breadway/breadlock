@@ -143,10 +143,7 @@ mod tests {
     #[test]
     fn cstr_to_username_copies_nul_terminated_name() {
         let raw = CString::new("breadway").unwrap();
-        assert_eq!(
-            cstr_to_username(raw.as_ptr()),
-            Some("breadway".to_string())
-        );
+        assert_eq!(cstr_to_username(raw.as_ptr()), Some("breadway".to_string()));
     }
 
     #[test]

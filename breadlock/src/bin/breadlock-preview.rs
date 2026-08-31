@@ -97,13 +97,24 @@ impl Default for Scene {
 /// (image background + Ken Burns, full chrome) in a loop and prints per-frame
 /// timings, so the software renderer's cost can be measured without Wayland.
 fn bench(args: &[String]) {
-    let parse = |s: &str, d: &str| -> String { args.iter().find(|a| a.starts_with(s)).map(|a| a[s.len()..].to_string()).unwrap_or_else(|| d.to_string()) };
+    let parse = |s: &str, d: &str| -> String {
+        args.iter()
+            .find(|a| a.starts_with(s))
+            .map(|a| a[s.len()..].to_string())
+            .unwrap_or_else(|| d.to_string())
+    };
     let size: (u32, u32) = {
-        let v: Vec<u32> = parse("--size=", "1920x1200").split('x').filter_map(|s| s.parse().ok()).collect();
+        let v: Vec<u32> = parse("--size=", "1920x1200")
+            .split('x')
+            .filter_map(|s| s.parse().ok())
+            .collect();
         (v[0], v[1])
     };
     let frames: u32 = parse("--frames=", "120").parse().unwrap_or(120);
-    let path = parse("--wallpaper=", "/home/breadway/.config/breadlock/wallpaper.png");
+    let path = parse(
+        "--wallpaper=",
+        "/home/breadway/.config/breadlock/wallpaper.png",
+    );
 
     let palette = theme::load_palette();
     let bg_cfg = breadlock_ui::config::Background {
@@ -125,25 +136,26 @@ fn bench(args: &[String]) {
         font_family: FONT,
         clock_text: "12:34",
         date_text: "Friday · Aug 21",
-        clock_old: None,            password_len: 6,
-            password: "hunter2",
-            reveal: false,
-            caps_lock: false,
-            layout_index: 0,
-            idle_dim: 0.0,
-            failed: false,
-            failed_t: 0.0,
-            dot_pop_t: 1.0,
-            keystroke_age: None,
-            t_secs: 0.0,
-            breathe_t: 0.0,
-            status_t: 1.0,
-            status_text: None,
-            info_text: "",
-            appear_t: 1.0,
-            unlock_t: 0.0,
-            smooth_pan: true,
-        };
+        clock_old: None,
+        password_len: 6,
+        password: "hunter2",
+        reveal: false,
+        caps_lock: false,
+        layout_index: 0,
+        idle_dim: 0.0,
+        failed: false,
+        failed_t: 0.0,
+        dot_pop_t: 1.0,
+        keystroke_age: None,
+        t_secs: 0.0,
+        breathe_t: 0.0,
+        status_t: 1.0,
+        status_text: None,
+        info_text: "",
+        appear_t: 1.0,
+        unlock_t: 0.0,
+        smooth_pan: true,
+    };
     compose(&mut text, &warm).expect("warm-up compose failed");
 
     // Isolate the background pass cost (wallpaper blit + fills) alone.
@@ -157,7 +169,10 @@ fn bench(args: &[String]) {
         }
         bg_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let avg: f64 = bg_times.iter().sum::<f64>() / bg_times.len() as f64;
-        println!("background.paint only: avg {avg:.2} ms  max {:.2} ms", bg_times[bg_times.len() - 1]);
+        println!(
+            "background.paint only: avg {avg:.2} ms  max {:.2} ms",
+            bg_times[bg_times.len() - 1]
+        );
     }
 
     let mut times = Vec::with_capacity(frames as usize);
@@ -222,47 +237,138 @@ fn main() {
     std::fs::create_dir_all(&out_dir).expect("failed to create preview output dir");
 
     let palette = theme::load_palette();
-    let background = background::Background::load(
-        &breadlock_ui::config::Background::default(),
-        &palette,
-    );
+    let background =
+        background::Background::load(&breadlock_ui::config::Background::default(), &palette);
 
     let scenes = [
         // ---- Staggered entrance: clock leads, pill pops in last (overshoot).
-        Scene { name: "01-appear-start", appear_t: 0.0, ..Scene::default() },
-        Scene { name: "02-appear-clock", password_len: 4, appear_t: 0.25, ..Scene::default() },
-        Scene { name: "03-appear-pill", password_len: 4, appear_t: 0.55, ..Scene::default() },
+        Scene {
+            name: "01-appear-start",
+            appear_t: 0.0,
+            ..Scene::default()
+        },
+        Scene {
+            name: "02-appear-clock",
+            password_len: 4,
+            appear_t: 0.25,
+            ..Scene::default()
+        },
+        Scene {
+            name: "03-appear-pill",
+            password_len: 4,
+            appear_t: 0.55,
+            ..Scene::default()
+        },
         // ---- Rest pose: empty pill showing the "Enter password" hint.
-        Scene { name: "04-rest-pose", t_secs: 0.5, ..Scene::default() },
+        Scene {
+            name: "04-rest-pose",
+            t_secs: 0.5,
+            ..Scene::default()
+        },
         // ---- Idle breath: glow peak on the pill (accent ring + deeper shadow).
-        Scene { name: "05-breathe-peak", breathe_t: 1.0, ..Scene::default() },
+        Scene {
+            name: "05-breathe-peak",
+            breathe_t: 1.0,
+            ..Scene::default()
+        },
         // ---- Typing: newest dot mid-pop, caret solid.
-        Scene { name: "06-typing-pop", password_len: 6, dot_pop_t: 0.4, keystroke_age: Some(0.2), ..Scene::default() },
+        Scene {
+            name: "06-typing-pop",
+            password_len: 6,
+            dot_pop_t: 0.4,
+            keystroke_age: Some(0.2),
+            ..Scene::default()
+        },
         // ---- Idle blink: two dots, caret lit (phase 0.36 → visible half-cycle).
-        Scene { name: "07-idle-blink", password_len: 2, ..Scene::default() },
+        Scene {
+            name: "07-idle-blink",
+            password_len: 2,
+            ..Scene::default()
+        },
         // ---- Checking: status mid slide-in. Live submit() zeros the secret
         // so password_len is 0 — don't fake a filled pill here.
-        Scene { name: "08-checking", status: Some("Checking…"), status_t: 0.5, password_len: 0, password: "", ..Scene::default() },
+        Scene {
+            name: "08-checking",
+            status: Some("Checking…"),
+            status_t: 0.5,
+            password_len: 0,
+            password: "",
+            ..Scene::default()
+        },
         // ---- Wrong password: mid-shake, red pill, red status (settled).
-        Scene { name: "09-failed-shake", password_len: 6, failed: true, failed_t: 0.35, status: Some("Wrong password"), ..Scene::default() },
+        Scene {
+            name: "09-failed-shake",
+            password_len: 6,
+            failed: true,
+            failed_t: 0.35,
+            status: Some("Wrong password"),
+            ..Scene::default()
+        },
         // ---- Success: green flash ring, dots cascading accent → white.
-        Scene { name: "10-success-flash", password_len: 6, unlock_t: 0.12, ..Scene::default() },
+        Scene {
+            name: "10-success-flash",
+            password_len: 6,
+            unlock_t: 0.12,
+            ..Scene::default()
+        },
         // ---- Unlock fade-out: chrome faded, parallax drift (clock furthest).
-        Scene { name: "11-unlock-fade", password_len: 6, unlock_t: 0.8, ..Scene::default() },
+        Scene {
+            name: "11-unlock-fade",
+            password_len: 6,
+            unlock_t: 0.8,
+            ..Scene::default()
+        },
         // ---- Minute rollover: old clock fading out above, new fading in below.
-        Scene { name: "12-clock-crossfade", clock: "12:35", clock_old: Some(("12:34", 0.5)), password_len: 4, ..Scene::default() },
+        Scene {
+            name: "12-clock-crossfade",
+            clock: "12:35",
+            clock_old: Some(("12:34", 0.5)),
+            password_len: 4,
+            ..Scene::default()
+        },
         // ---- Caps Lock on: chip above the pill.
-        Scene { name: "13-caps-lock", password_len: 4, caps_lock: true, ..Scene::default() },
+        Scene {
+            name: "13-caps-lock",
+            password_len: 4,
+            caps_lock: true,
+            ..Scene::default()
+        },
         // ---- Non-default layout: layout chip instead of caps.
-        Scene { name: "14-layout-2", password_len: 4, layout_index: 1, ..Scene::default() },
+        Scene {
+            name: "14-layout-2",
+            password_len: 4,
+            layout_index: 1,
+            ..Scene::default()
+        },
         // ---- Hold-to-reveal: plain password characters instead of dots.
-        Scene { name: "15-reveal", password_len: 7, password: "hunter2", reveal: true, ..Scene::default() },
+        Scene {
+            name: "15-reveal",
+            password_len: 7,
+            password: "hunter2",
+            reveal: true,
+            ..Scene::default()
+        },
         // ---- Idle auto-dim: deepened veil (rest pose + full idle dim).
-        Scene { name: "16-idle-dim", idle_dim: 1.0, ..Scene::default() },
+        Scene {
+            name: "16-idle-dim",
+            idle_dim: 1.0,
+            ..Scene::default()
+        },
         // ---- Repeat failure: attempt counter in the status line.
-        Scene { name: "17-failed-3x", password_len: 6, failed: true, failed_t: 0.8, status: Some("Wrong password — 3 failed attempts"), ..Scene::default() },
+        Scene {
+            name: "17-failed-3x",
+            password_len: 6,
+            failed: true,
+            failed_t: 0.8,
+            status: Some("Wrong password — 3 failed attempts"),
+            ..Scene::default()
+        },
         // ---- D-Bus status: now-playing + battery under the clock.
-        Scene { name: "18-status-info", info: "The War on Drugs — Red Eyes  ·  87% · charging", ..Scene::default() },
+        Scene {
+            name: "18-status-info",
+            info: "The War on Drugs — Red Eyes  ·  87% · charging",
+            ..Scene::default()
+        },
     ];
 
     let mut text = TextRenderer::new();

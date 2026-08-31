@@ -99,6 +99,12 @@ fn singleton_held(app: &str) -> bool {
 /// this binary, no args. The child is reaped on a background thread so
 /// a later unlock cannot leave a zombie under `breadlock listen`.
 pub fn start_locker() -> Result<(), String> {
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        // The child would `Connection::connect_to_env().expect(...)` and die
+        // with a panic shortly after spawn. Better to report the lock command
+        // as failed than to leave a coredumping orphan in its stead.
+        return Err("WAYLAND_DISPLAY is not set; cannot start a Wayland locker".into());
+    }
     let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("breadlock"));
     let mut child = Command::new(exe)
         .stdin(Stdio::null())
