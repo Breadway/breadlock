@@ -46,6 +46,8 @@ struct App {
     date_lbl: gtk4::Label,
     status_lbl: gtk4::Label,
     entry: gtk4::Entry,
+    card: gtk4::Box,
+    spinner: gtk4::Box,
     stage: Stage,
     username: String,
     sessions: Vec<sessions::Session>,
@@ -168,10 +170,18 @@ impl SimpleComponent for App {
             dropdown.upcast()
         };
 
-        let card = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+        // A CSS-animated ring (not GtkSpinner) so it matches the design
+        // sketch exactly: 2px track, accent top, shown only while a greetd
+        // request is in flight (see `set_busy`).
+        let spinner = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        spinner.add_css_class("login-spinner");
+        spinner.set_halign(gtk4::Align::Center);
+
+        let card = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         card.add_css_class("login-card");
         card.append(&entry);
         card.append(&status_lbl);
+        card.append(&spinner);
         card.append(&session_widget);
 
         let widgets = view_output!();
@@ -243,6 +253,8 @@ impl SimpleComponent for App {
             date_lbl,
             status_lbl,
             entry,
+            card,
+            spinner,
             stage: Stage::Username,
             username: String::new(),
             sessions,
@@ -289,10 +301,38 @@ impl SimpleComponent for App {
             }
             AppInput::Cancel => self.cancel_auth(),
         }
+        self.sync_busy();
     }
 }
 
 impl App {
+    /// Spinner runs exactly while a greetd request is in flight. Driven from
+    /// one place (the end of `update`) so every path — submit, prompt,
+    /// cancel, error — stays in sync with `self.stage`.
+    fn sync_busy(&self) {
+        let busy = matches!(self.stage, Stage::Working | Stage::Starting);
+        if busy {
+            self.spinner.add_css_class("spinning");
+        } else {
+            self.spinner.remove_css_class("spinning");
+        }
+    }
+
+    /// One-shot shake on the card, matching the lock screen's wrong-password
+    /// motion. Re-armed each call by dropping the class first (a running
+    /// animation won't restart just from re-adding it).
+    fn flash_error(&self) {
+        self.card.remove_css_class("shake");
+        let card = self.card.clone();
+        gtk4::glib::timeout_add_local_once(std::time::Duration::from_millis(10), move || {
+            card.add_css_class("shake");
+            let card2 = card.clone();
+            gtk4::glib::timeout_add_local_once(std::time::Duration::from_millis(420), move || {
+                card2.remove_css_class("shake");
+            });
+        });
+    }
+
     fn handle_submit(&mut self) {
         if matches!(self.stage, Stage::Working | Stage::Starting) {
             return;
@@ -338,6 +378,7 @@ impl App {
             AuthPrompt::Error(message) => {
                 self.status_lbl.add_css_class("error");
                 self.status_lbl.set_label(&message);
+                self.flash_error();
                 self.pam_status_held = true;
                 self.dispatch(greetd::Command::Respond(None));
             }
@@ -403,6 +444,7 @@ impl App {
             self.status_lbl.remove_css_class("error");
         } else {
             self.status_lbl.add_css_class("error");
+            self.flash_error();
         }
         self.reset_to_username();
     }
