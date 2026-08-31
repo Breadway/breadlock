@@ -21,6 +21,17 @@ date_format = "%A · %b %d"
 [font]
 family = "Varela Round"
 
+[user]
+# By default breadgreet enumerates the system's human accounts (/etc/passwd,
+# UID_MIN..UID_MAX from /etc/login.defs) and skips the username field: one
+# account goes straight to the password prompt, several show a picker. These
+# keys override that.
+#
+# Pin one account and don't enumerate (empty = auto-detect):
+name = ""
+# Always ask for the username by hand (the pre-enumeration behaviour):
+prompt = false
+
 [sessions]
 # Directories scanned for .desktop session entries, in order.
 wayland_dirs = ["/usr/share/wayland-sessions"]
