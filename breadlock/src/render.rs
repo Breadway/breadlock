@@ -411,7 +411,8 @@ fn compose_impl(
     let status_e = ease_out_cubic(staggered_t(inputs.appear_t, STATUS_DELAY_MS));
     // Per-element vertical motion: the appear part is uniform, the unlock
     // drift is scaled per element for parallax.
-    let elem_y = |e: f32, drift: f32| APPEAR_SLIDE_PX * (1.0 - e) - UNLOCK_DRIFT_PX * unlock * drift;
+    let elem_y =
+        |e: f32, drift: f32| APPEAR_SLIDE_PX * (1.0 - e) - UNLOCK_DRIFT_PX * unlock * drift;
 
     // ---- Clock, large, centered in the upper third (size scales with the
     // surface). A minute rollover crossfades old text out (drifting up) while
@@ -428,7 +429,9 @@ fn compose_impl(
     if let Some(r) = rects.as_deref_mut() {
         let old_w = inputs
             .clock_old
-            .map(|(t, _)| text.measure_line_weighted(t, inputs.font_family, clock_size, Weight::BOLD))
+            .map(|(t, _)| {
+                text.measure_line_weighted(t, inputs.font_family, clock_size, Weight::BOLD)
+            })
             .unwrap_or(0.0);
         let new_w = text.measure_line_weighted(
             inputs.clock_text,
@@ -437,12 +440,18 @@ fn compose_impl(
             Weight::BOLD,
         );
         let cw = old_w.max(new_w);
-        r.expand((w - cw) / 2.0, clock_y, (w + cw) / 2.0, clock_y + clock_size);
+        r.expand(
+            (w - cw) / 2.0,
+            clock_y,
+            (w + cw) / 2.0,
+            clock_y + clock_size,
+        );
     }
     match inputs.clock_old {
         Some((old, t)) => {
             let t = t.clamp(0.0, 1.0);
-            let old_w = text.measure_line_weighted(old, inputs.font_family, clock_size, Weight::BOLD);
+            let old_w =
+                text.measure_line_weighted(old, inputs.font_family, clock_size, Weight::BOLD);
             text.draw_line_weighted(
                 pixmap,
                 old,
@@ -494,15 +503,27 @@ fn compose_impl(
     // now-playing / battery under that. Info is *not* nested under the date
     // — an empty `date_format` used to hide the status line too.
     let date_size = (w * 0.016).clamp(DATE_SIZE_MIN, DATE_SIZE_MAX);
-    let (clock_top, clock_height) =
-        text.measure_box_weighted(inputs.clock_text, inputs.font_family, clock_size, Weight::BOLD);
-    let mut below_y = clock_y_rest + elem_y(date_e, DRIFT_DATE) + clock_top + clock_height
+    let (clock_top, clock_height) = text.measure_box_weighted(
+        inputs.clock_text,
+        inputs.font_family,
+        clock_size,
+        Weight::BOLD,
+    );
+    let mut below_y = clock_y_rest
+        + elem_y(date_e, DRIFT_DATE)
+        + clock_top
+        + clock_height
         + tokens::SPACE_SM as f32;
     if !inputs.date_text.is_empty() {
         let date_y = below_y;
         let date_w = text.measure_line(inputs.date_text, inputs.font_family, date_size);
         if let Some(r) = rects.as_mut() {
-            r.expand((w - date_w) / 2.0, date_y, (w + date_w) / 2.0, date_y + date_size);
+            r.expand(
+                (w - date_w) / 2.0,
+                date_y,
+                (w + date_w) / 2.0,
+                date_y + date_size,
+            );
         }
         text.draw_line(
             pixmap,
@@ -559,7 +580,11 @@ fn compose_impl(
     let breathe = 1.0 + BREATHE_GLOW * inputs.breathe_t;
 
     let base_pill = if inputs.failed {
-        lerp_color(surface_color, red_color, (inputs.failed_t / SHAKE_RED_FRAC).clamp(0.0, 1.0))
+        lerp_color(
+            surface_color,
+            red_color,
+            (inputs.failed_t / SHAKE_RED_FRAC).clamp(0.0, 1.0),
+        )
     } else {
         surface_color
     };
@@ -570,8 +595,16 @@ fn compose_impl(
     };
     // The pill scales about its center (ease-out-back overshoot) instead of
     // rising like the text; while unlocking it stays at rest scale.
-    let scale = if inputs.unlock_t > 0.0 { 1.0 } else { pill_scale };
-    let shake_x = if inputs.failed { damped_shake_x(inputs.failed_t) } else { 0.0 };
+    let scale = if inputs.unlock_t > 0.0 {
+        1.0
+    } else {
+        pill_scale
+    };
+    let shake_x = if inputs.failed {
+        damped_shake_x(inputs.failed_t)
+    } else {
+        0.0
+    };
     let cx = pill_x + pill_w / 2.0;
     let cy = pill_y + pill_h / 2.0;
     let pill_xf = Transform::from_row(
@@ -603,9 +636,13 @@ fn compose_impl(
         );
     }
 
-    if let Some(path) =
-        rounded_rect(pill_x, pill_y, pill_w, pill_h, tokens::RADIUS_SECONDARY as f32)
-    {
+    if let Some(path) = rounded_rect(
+        pill_x,
+        pill_y,
+        pill_w,
+        pill_h,
+        tokens::RADIUS_SECONDARY as f32,
+    ) {
         // Soft drop shadow first (under the fill): concentric expanded copies
         // offset downward at fading alpha. The idle breath scales the glow.
         for (grow, alpha) in PILL_SHADOW {
@@ -632,13 +669,7 @@ fn compose_impl(
         let mut paint = Paint::default();
         paint.set_color(faded(pill_color, pill_alpha));
         paint.anti_alias = true;
-        pixmap.fill_path(
-            &path,
-            &paint,
-            tiny_skia::FillRule::Winding,
-            pill_xf,
-            None,
-        );
+        pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, pill_xf, None);
 
         // Hairline border for depth — dropped on the wrong/success states
         // (the sketch sets `border-color: transparent` there).
@@ -663,7 +694,10 @@ fn compose_impl(
                 ..Default::default()
             };
             let mut paint = Paint::default();
-            paint.set_color(faded(accent_color, BREATHE_RING_ALPHA * inputs.breathe_t * pill_alpha));
+            paint.set_color(faded(
+                accent_color,
+                BREATHE_RING_ALPHA * inputs.breathe_t * pill_alpha,
+            ));
             pixmap.stroke_path(&path, &paint, &stroke, pill_xf, None);
         }
 
@@ -696,7 +730,8 @@ fn compose_impl(
             label.push_str(&format!("Layout {}", inputs.layout_index + 1));
         }
         let chip_size = tokens::FONT_SIZE_SECONDARY as f32;
-        let chip_w = text.measure_line(&label, inputs.font_family, chip_size) + tokens::SPACE_MD as f32 * 2.0;
+        let chip_w = text.measure_line(&label, inputs.font_family, chip_size)
+            + tokens::SPACE_MD as f32 * 2.0;
         let chip_h = chip_size * 1.9;
         let chip_x = (w - chip_w) / 2.0;
         // Clear of the pill: chip bottom sits a full SPACE_LG above the pill
@@ -711,7 +746,13 @@ fn compose_impl(
             // Slightly lifted surface color so it reads as a separate chip.
             paint.set_color(faded(surface_color, chip_alpha));
             paint.anti_alias = true;
-            pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+            pixmap.fill_path(
+                &path,
+                &paint,
+                tiny_skia::FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
             let stroke = tiny_skia::Stroke {
                 width: 1.0,
                 ..Default::default()
@@ -808,13 +849,7 @@ fn compose_impl(
                 let mut paint = Paint::default();
                 paint.set_color(faded(dot_color, pill_alpha));
                 paint.anti_alias = true;
-                pixmap.fill_path(
-                    &path,
-                    &paint,
-                    tiny_skia::FillRule::Winding,
-                    pill_xf,
-                    None,
-                );
+                pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, pill_xf, None);
             }
         }
     }
@@ -859,23 +894,12 @@ fn compose_impl(
                 accent_color
             };
             let caret_h = pill_h * 0.5;
-            if let Some(path) = rounded_rect(
-                caret_x,
-                dot_y - caret_h / 2.0,
-                CARET_W,
-                caret_h,
-                1.0,
-            ) {
+            if let Some(path) = rounded_rect(caret_x, dot_y - caret_h / 2.0, CARET_W, caret_h, 1.0)
+            {
                 let mut paint = Paint::default();
                 paint.set_color(faded(caret_color, pill_alpha));
                 paint.anti_alias = true;
-                pixmap.fill_path(
-                    &path,
-                    &paint,
-                    tiny_skia::FillRule::Winding,
-                    pill_xf,
-                    None,
-                );
+                pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, pill_xf, None);
             }
         }
     }
@@ -889,10 +913,18 @@ fn compose_impl(
         let status_anim = ease_out_cubic(inputs.status_t);
         let status_alpha = status_e * fade * status_anim;
         let color = if inputs.failed { red_color } else { on_surface };
-        let status_y = pill_y_rest + pill_h + tokens::SPACE_MD as f32 + elem_y(status_e, DRIFT_STATUS)
+        let status_y = pill_y_rest
+            + pill_h
+            + tokens::SPACE_MD as f32
+            + elem_y(status_e, DRIFT_STATUS)
             + STATUS_SLIDE_PX * (1.0 - status_anim);
         if let Some(r) = rects.as_mut() {
-            r.expand((w - status_w) / 2.0, status_y, (w + status_w) / 2.0, status_y + status_size);
+            r.expand(
+                (w - status_w) / 2.0,
+                status_y,
+                (w + status_w) / 2.0,
+                status_y + status_size,
+            );
         }
         text.draw_line(
             pixmap,
@@ -968,7 +1000,12 @@ mod tests {
         let top = px[0];
         let bottom = px[2 * 3];
         // DIM_ALPHA_TOP (0.34) > DIM_ALPHA_BOTTOM (0.16): top row darker.
-        assert!(top.red() < bottom.red(), "top {} should be darker than bottom {}", top.red(), bottom.red());
+        assert!(
+            top.red() < bottom.red(),
+            "top {} should be darker than bottom {}",
+            top.red(),
+            bottom.red()
+        );
         // White at top dim 0.34 → 255 * (1 - 0.34) = 168.
         assert_eq!(top.red(), 168);
         // Bottom row is y/h = 0.75 → dim = 0.34 + (0.16 - 0.34) * 0.75 = 0.205.
@@ -1083,15 +1120,48 @@ mod tests {
         let palette = breadlock_ui::theme::Palette::default();
         let mut text = TextRenderer::new();
         // Wrong-password shake mid-flight.
-        let failed = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, true, 0.3, 0.4, 1.0, 0.0);
+        let failed = inputs(
+            &bg,
+            &palette,
+            "12:34",
+            "Friday · Aug 21",
+            4,
+            true,
+            0.3,
+            0.4,
+            1.0,
+            0.0,
+        );
         let failed_px = compose(&mut text, &failed).expect("failed compose");
         assert_eq!((failed_px.width(), failed_px.height()), (400, 300));
         assert!(failed_px.pixels().iter().any(|p| p.alpha() > 0));
         // Success flash phase of the unlock: still fully opaque chrome (flash
         // holds rest pose), not already faded.
-        let success = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 1.0, 0.12);
+        let success = inputs(
+            &bg,
+            &palette,
+            "12:34",
+            "Friday · Aug 21",
+            4,
+            false,
+            0.0,
+            1.0,
+            1.0,
+            0.12,
+        );
         let success_px = compose(&mut text, &success).expect("success compose");
-        let rest = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 1.0, 0.0);
+        let rest = inputs(
+            &bg,
+            &palette,
+            "12:34",
+            "Friday · Aug 21",
+            4,
+            false,
+            0.0,
+            1.0,
+            1.0,
+            0.0,
+        );
         let rest_px = compose(&mut text, &rest).expect("rest compose");
         // Flash frame should not be a near-empty fade — plenty of chrome left.
         let flash_lit = success_px.pixels().iter().filter(|p| p.alpha() > 0).count();
@@ -1101,7 +1171,18 @@ mod tests {
             "success flash should keep chrome visible, lit {flash_lit} vs rest {rest_lit}"
         );
         // Fully faded unlock returns just the background.
-        let done = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 1.0, 1.0);
+        let done = inputs(
+            &bg,
+            &palette,
+            "12:34",
+            "Friday · Aug 21",
+            4,
+            false,
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+        );
         let done_px = compose(&mut text, &done).expect("done compose");
         assert_eq!((done_px.width(), done_px.height()), (400, 300));
     }
@@ -1130,11 +1211,17 @@ mod tests {
     fn reveal_fit_truncates_long_passwords() {
         let mut text = TextRenderer::new();
         // Short password fits unchanged.
-        assert_eq!(ellipsize(&mut text, "hunter2", "sans-serif", 14.0, 200.0), "hunter2");
+        assert_eq!(
+            ellipsize(&mut text, "hunter2", "sans-serif", 14.0, 200.0),
+            "hunter2"
+        );
         // A very long one is trimmed and ends with an ellipsis.
         let long = "a".repeat(200);
         let fitted = ellipsize(&mut text, &long, "sans-serif", 14.0, 60.0);
-        assert!(fitted.ends_with('…'), "trimmed reveal should end with an ellipsis");
+        assert!(
+            fitted.ends_with('…'),
+            "trimmed reveal should end with an ellipsis"
+        );
         assert!(fitted.len() < long.len());
         // And it actually fits the budget.
         assert!(text.measure_line(&fitted, "sans-serif", 14.0) <= 60.0);
@@ -1145,7 +1232,18 @@ mod tests {
         let bg = Background::Color(Color::BLACK);
         let palette = breadlock_ui::theme::Palette::default();
         let mut text = TextRenderer::new();
-        let mut base = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 1.0, 0.0);
+        let mut base = inputs(
+            &bg,
+            &palette,
+            "12:34",
+            "Friday · Aug 21",
+            4,
+            false,
+            0.0,
+            1.0,
+            1.0,
+            0.0,
+        );
         base.caps_lock = true;
         base.password = "hunter2";
         // Caps chip visible, no reveal: dots path.
@@ -1234,8 +1332,14 @@ mod tests {
         // First FLASH_FRAC of unlock_t is the green flash at full opacity.
         let (a_rest, y_rest) = overlay_motion(1.0, 0.0);
         let (a_flash, y_flash) = overlay_motion(1.0, FLASH_FRAC * 0.5);
-        assert!((a_flash - a_rest).abs() < 1e-6, "flash must not fade chrome, got {a_flash}");
-        assert!((y_flash - y_rest).abs() < 1e-6, "flash must not drift chrome, got {y_flash}");
+        assert!(
+            (a_flash - a_rest).abs() < 1e-6,
+            "flash must not fade chrome, got {a_flash}"
+        );
+        assert!(
+            (y_flash - y_rest).abs() < 1e-6,
+            "flash must not drift chrome, got {y_flash}"
+        );
         // After the flash, fade/drift begin.
         let (a_fade, y_fade) = overlay_motion(1.0, (FLASH_FRAC + 1.0) * 0.5);
         assert!(a_fade < a_rest, "post-flash should fade, got {a_fade}");
@@ -1248,18 +1352,38 @@ mod tests {
         let palette = breadlock_ui::theme::Palette::default();
         let mut text = TextRenderer::new();
         let mut pixmap = Pixmap::new(400, 300).unwrap();
-        let inputs = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 1.0, 0.0);
+        let inputs = inputs(
+            &bg,
+            &palette,
+            "12:34",
+            "Friday · Aug 21",
+            4,
+            false,
+            0.0,
+            1.0,
+            1.0,
+            0.0,
+        );
         let rect = compose_chrome(&mut pixmap, &mut text, &inputs);
         assert!(
             rect.x1 > rect.x0 && rect.y1 > rect.y0,
             "chrome rect must be non-empty, got {rect:?}"
         );
         // Clock sits at h*0.28 with glyph height ~ clock_size (400*0.075=30).
-        assert!(rect.y0 < 300.0 * 0.28 + 40.0, "rect must cover the clock band");
+        assert!(
+            rect.y0 < 300.0 * 0.28 + 40.0,
+            "rect must cover the clock band"
+        );
         // Pill sits at h*0.5; with the 26px pad the rect must reach it.
-        assert!(rect.y1 > 300.0 * 0.5 + 24.0, "rect must cover the pill band");
+        assert!(
+            rect.y1 > 300.0 * 0.5 + 24.0,
+            "rect must cover the pill band"
+        );
         // Both are horizontally centered.
-        assert!(rect.x0 < 200.0 && rect.x1 > 200.0, "rect must straddle center");
+        assert!(
+            rect.x0 < 200.0 && rect.x1 > 200.0,
+            "rect must straddle center"
+        );
         // Origin-stuck Default(0,0,…) used to pass the checks above (0.min
         // never leaves 0, and 0 < 200 && x1 > 200 still holds). Fail that.
         assert!(
@@ -1276,9 +1400,23 @@ mod tests {
         let mut pixmap = Pixmap::new(400, 300).unwrap();
         // unlock_t = 1 → chrome is gone; appear_t = 0 still draws (invisible)
         // chrome so the GPU dirty rect is valid from the first frame.
-        let inputs = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 1.0, 1.0);
+        let inputs = inputs(
+            &bg,
+            &palette,
+            "12:34",
+            "Friday · Aug 21",
+            4,
+            false,
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+        );
         let rect = compose_chrome(&mut pixmap, &mut text, &inputs);
-        assert!(rect.is_empty(), "finished unlock must yield an empty rect, got {rect:?}");
+        assert!(
+            rect.is_empty(),
+            "finished unlock must yield an empty rect, got {rect:?}"
+        );
         assert!(
             pixmap.pixels().iter().all(|p| p.alpha() == 0),
             "finished unlock must leave the pixmap transparent"
@@ -1291,7 +1429,18 @@ mod tests {
         let palette = breadlock_ui::theme::Palette::default();
         let mut text = TextRenderer::new();
         let mut pixmap = Pixmap::new(400, 300).unwrap();
-        let inputs = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 0.0, 0.0);
+        let inputs = inputs(
+            &bg,
+            &palette,
+            "12:34",
+            "Friday · Aug 21",
+            4,
+            false,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+        );
         let rect = compose_chrome(&mut pixmap, &mut text, &inputs);
         assert!(
             !rect.is_empty() && rect.x0 > 0.0 && rect.y0 > 0.0,
@@ -1305,9 +1454,31 @@ mod tests {
         let palette = breadlock_ui::theme::Palette::default();
         let mut text = TextRenderer::new();
         let mut pixmap = Pixmap::new(400, 300).unwrap();
-        let rest = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, true, 0.0, 1.0, 1.0, 0.0);
+        let rest = inputs(
+            &bg,
+            &palette,
+            "12:34",
+            "Friday · Aug 21",
+            4,
+            true,
+            0.0,
+            1.0,
+            1.0,
+            0.0,
+        );
         let r0 = compose_chrome(&mut pixmap, &mut text, &rest);
-        let mid = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, true, 0.3, 1.0, 1.0, 0.0);
+        let mid = inputs(
+            &bg,
+            &palette,
+            "12:34",
+            "Friday · Aug 21",
+            4,
+            true,
+            0.3,
+            1.0,
+            1.0,
+            0.0,
+        );
         let r1 = compose_chrome(&mut pixmap, &mut text, &mid);
         assert!(
             (r0.x0 - r1.x0).abs() > 0.5 || (r0.x1 - r1.x1).abs() > 0.5,
@@ -1328,7 +1499,11 @@ mod tests {
                     n += 1.0;
                 }
             }
-            if n > 0.0 { sx / n } else { 0.0 }
+            if n > 0.0 {
+                sx / n
+            } else {
+                0.0
+            }
         };
         let dx = (centroid_x(&shaken_px) - centroid_x(&rest_px)).abs();
         assert!(
@@ -1369,7 +1544,18 @@ mod tests {
         let palette = breadlock_ui::theme::Palette::default();
         let mut text = TextRenderer::new();
         let mut pixmap = Pixmap::new(400, 300).unwrap();
-        let mut with_status = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, true, 0.3, 1.0, 1.0, 0.0);
+        let mut with_status = inputs(
+            &bg,
+            &palette,
+            "12:34",
+            "Friday · Aug 21",
+            4,
+            true,
+            0.3,
+            1.0,
+            1.0,
+            0.0,
+        );
         with_status.status_text = Some("Wrong password");
         let rect = compose_chrome(&mut pixmap, &mut text, &with_status);
         // Status sits below the pill: pill bottom is h*0.5 + 24 (half of 48px),
@@ -1391,14 +1577,27 @@ mod tests {
         let bg = Background::Color(Color::from_rgba8(40, 60, 80, 255));
         let palette = breadlock_ui::theme::Palette::default();
         let mut text = TextRenderer::new();
-        let inputs = inputs(&bg, &palette, "12:34", "Friday · Aug 21", 4, false, 0.0, 1.0, 1.0, 0.0);
+        let inputs = inputs(
+            &bg,
+            &palette,
+            "12:34",
+            "Friday · Aug 21",
+            4,
+            false,
+            0.0,
+            1.0,
+            1.0,
+            0.0,
+        );
 
         // Full single-pass compose.
         let full = compose(&mut text, &inputs).unwrap();
 
         // Split: dim the background, then composite the chrome over it.
         let mut split = Pixmap::new(400, 300).unwrap();
-        inputs.background.paint(&mut split, inputs.t_secs, inputs.smooth_pan);
+        inputs
+            .background
+            .paint(&mut split, inputs.t_secs, inputs.smooth_pan);
         let (veil_alpha, _) = overlay_motion(inputs.appear_t, inputs.unlock_t);
         if veil_alpha > 0.0 {
             dim_rows(&mut split, veil_alpha);
@@ -1430,7 +1629,8 @@ mod tests {
             .iter()
             .zip(full.pixels())
             .map(|(a, b)| {
-                (a.red() as i32 - b.red() as i32).abs()
+                (a.red() as i32 - b.red() as i32)
+                    .abs()
                     .max((a.green() as i32 - b.green() as i32).abs())
                     .max((a.blue() as i32 - b.blue() as i32).abs())
                     .max((a.alpha() as i32 - b.alpha() as i32).abs())
@@ -1449,5 +1649,3 @@ mod tests {
         );
     }
 }
-
-

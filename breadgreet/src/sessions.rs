@@ -103,23 +103,36 @@ fn split_exec(exec: &str) -> Vec<String> {
 fn tokenize_exec(exec: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
-    let mut in_quote = false;
+    let mut in_quote = None; // Some('"') or Some('\'')
     let mut chars = exec.chars().peekable();
 
     while let Some(c) = chars.next() {
-        match c {
-            '"' => in_quote = !in_quote,
-            '\\' if in_quote => {
-                if let Some(n) = chars.next() {
-                    current.push(n);
+        match in_quote {
+            Some(q) => match c {
+                // Closing the active quote just toggles back to unquoted.
+                c if c == q => in_quote = None,
+                // Inside double quotes a backslash escapes the next char
+                // (freedesktop Exec). Inside single quotes it's literal.
+                '\\' if q == '"' => match chars.next() {
+                    Some(n) => current.push(n),
+                    None => current.push('\\'),
+                },
+                _ => current.push(c),
+            },
+            None => match c {
+                '"' | '\'' => in_quote = Some(c),
+                // Single quotes have no quoting/escaping inside them.
+                '\\' => match chars.next() {
+                    Some(n) => current.push(n),
+                    None => current.push('\\'),
+                },
+                c if c.is_whitespace() => {
+                    if !current.is_empty() {
+                        args.push(std::mem::take(&mut current));
+                    }
                 }
-            }
-            c if c.is_whitespace() && !in_quote => {
-                if !current.is_empty() {
-                    args.push(std::mem::take(&mut current));
-                }
-            }
-            _ => current.push(c),
+                _ => current.push(c),
+            },
         }
     }
     if !current.is_empty() {
@@ -171,6 +184,80 @@ mod tests {
     fn split_exec_double_percent_is_literal() {
         assert_eq!(split_exec("echo %%"), vec!["echo", "%"]);
         assert_eq!(split_exec(r#"echo "100%%""#), vec!["echo", "100%"]);
+    }
+
+    #[test]
+    fn split_exec_handles_single_quotes_and_escapes() {
+        // Single-quoted arguments are one token (previously these split).
+        assert_eq!(split_exec(r#"cmd 'two words'"#), vec!["cmd", "two words"]);
+        // A backslash outside quotes escapes the next character, so an
+        // escaped space merges into the running token.
+        assert_eq!(split_exec(r"cmd a\ b"), vec!["cmd", "a b"]);
+        // `\"` inside double quotes is an escaped backslash then a close
+        // quote, i.e. a literal backslash inside a quoted argument.
+        assert_eq!(split_exec(r#"cmd "a\"b""#), vec!["cmd", "a\"b"]);
+    }
+
+    #[test]
+    fn tokenize_exec_quotes_spaces_and_escapes_edge_cases() {
+        // Quoting preserves embedded spaces; a backslash escapes a space.
+        assert_eq!(tokenize_exec("echo \"a b\""), vec!["echo", "a b"]);
+        assert_eq!(tokenize_exec("echo 'a b'"), vec!["echo", "a b"]);
+        assert_eq!(tokenize_exec("echo a\\ b"), vec!["echo", "a b"]);
+        // Inside double quotes a backslash escapes the next character,
+        // including the quote itself.
+        assert_eq!(tokenize_exec(r#"echo "a\"b""#), vec!["echo", "a\"b"]);
+        // An escaped backslash outside quotes yields one literal backslash.
+        assert_eq!(tokenize_exec(r"echo a\\"), vec!["echo", "a\\"]);
+        // Quoting can splice mid-word (the space is part of one argument).
+        assert_eq!(
+            tokenize_exec(r#"echo pre"mid dle"post"#),
+            vec!["echo", "premid dlepost"]
+        );
+        // Plain whitespace splits greedily, tabs/newlines included.
+        assert_eq!(tokenize_exec("  a   b\t c\n "), vec!["a", "b", "c"]);
+        // Field codes survive this layer; `split_exec` drops them later.
+        assert_eq!(
+            tokenize_exec("app %U --flag %f"),
+            vec!["app", "%U", "--flag", "%f"]
+        );
+        // An unclosed quote swallows the remainder as one token (no panic).
+        assert_eq!(tokenize_exec("app \"rest of"), vec!["app", "rest of"]);
+        // Empty / whitespace-only input yields no tokens.
+        assert!(tokenize_exec("").is_empty());
+        assert!(tokenize_exec("   \t  ").is_empty());
+    }
+
+    #[test]
+    fn tokenize_exec_fuzz_never_panics_and_emits_only_nonempty_tokens() {
+        // Pseudo-fuzz over quoting/escaping/whitespace/field-code characters:
+        // whatever the input, tokenizing must not panic and must never emit an
+        // empty token (the tokenizer only pushes non-empty buffers).
+        let alphabet: [char; 7] = ['a', 'b', ' ', '\'', '"', '\\', '%'];
+        let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut rng = move || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state
+        };
+        for _ in 0..5_000 {
+            let len = (rng() % 32) as usize;
+            let input: String = (0..len)
+                .map(|_| alphabet[(rng() as usize) % alphabet.len()])
+                .collect();
+            let tokens = tokenize_exec(&input);
+            assert!(
+                tokens.iter().all(|t| !t.is_empty()),
+                "tokenize must not emit empty tokens for {input:?} -> {tokens:?}"
+            );
+            // Whitespace-only input must yield no tokens. (The converse is
+            // deliberately not asserted: an input of only a quote/backslash
+            // adds no word chars and so correctly yields nothing.)
+            if input.chars().all(char::is_whitespace) {
+                assert!(tokens.is_empty(), "{input:?} -> {tokens:?}");
+            }
+        }
     }
 
     #[test]
@@ -231,21 +318,15 @@ mod tests {
         assert_eq!(listed[0].exec, vec!["/usr/local/bin/bos-session"]);
         assert_eq!(listed[0].kind, SessionKind::Wayland);
         assert_eq!(listed[2].kind, SessionKind::X11);
-        assert!(
-            listed[2]
-                .start_env()
-                .contains(&"XDG_SESSION_TYPE=x11".to_string())
-        );
-        assert!(
-            listed[0]
-                .start_env()
-                .contains(&"XDG_SESSION_TYPE=wayland".to_string())
-        );
-        assert!(
-            listed[0]
-                .start_env()
-                .contains(&"XDG_SESSION_DESKTOP=bos".to_string())
-        );
+        assert!(listed[2]
+            .start_env()
+            .contains(&"XDG_SESSION_TYPE=x11".to_string()));
+        assert!(listed[0]
+            .start_env()
+            .contains(&"XDG_SESSION_TYPE=wayland".to_string()));
+        assert!(listed[0]
+            .start_env()
+            .contains(&"XDG_SESSION_DESKTOP=bos".to_string()));
 
         std::fs::remove_dir_all(&wayland).ok();
         std::fs::remove_dir_all(&x11).ok();

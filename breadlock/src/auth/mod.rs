@@ -56,9 +56,25 @@ pub fn spawn_check(
     generation: u64,
     result_tx: Sender<AuthOutcome>,
 ) {
+    // Bound simultaneously-running PAM calls. libpam can't be cancelled, so a
+    // wedged module would otherwise spawn one uncancellable thread per retry
+    // (each pinned holding a `Zeroizing` password buffer) with no reclaim — a
+    // rapid retry against a stuck backend could grow threads without bound.
+    let Some(slot) = reserve_attempt() else {
+        tracing::warn!(
+            in_flight = IN_FLIGHT.load(Ordering::SeqCst),
+            "PAM attempt rejected: at in-flight cap"
+        );
+        let _ = result_tx.send((generation, Err(AuthError::Authenticate)));
+        return;
+    };
     std::thread::spawn(move || {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
+            // The slot outlives the outer thread's `recv_timeout`: it is only
+            // freed once the *real* PAM call returns, not when we hand back a
+            // timed-out failure, so the cap bounds actual outstanding PAM work.
+            let _slot = slot;
             let result = pam::check(&username, &password);
             let _ = done_tx.send(result);
         });
@@ -74,4 +90,67 @@ pub fn spawn_check(
         };
         let _ = result_tx.send((generation, result));
     });
+}
+
+/// Maximum PAM callbacks in flight at once (see [`spawn_check`]).
+const MAX_IN_FLIGHT: usize = 4;
+
+/// Live PAM-call count backing the cap.
+static IN_FLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+use std::sync::atomic::Ordering;
+
+/// RAII claim on one in-flight PAM slot; releasing happens on drop, wherever
+/// that thread ends. Holding it in the worker thread (not the timouter) is
+/// what keeps the cap honest about real outstanding PAM work.
+struct InFlightSlot;
+
+impl Drop for InFlightSlot {
+    fn drop(&mut self) {
+        IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Atomically claim one as-yet-unclaimed in-flight slot, or return `None`
+/// once [`MAX_IN_FLIGHT`] are running.
+fn reserve_attempt() -> Option<InFlightSlot> {
+    loop {
+        let current = IN_FLIGHT.load(Ordering::SeqCst);
+        if current >= MAX_IN_FLIGHT {
+            return None;
+        }
+        if IN_FLIGHT
+            .compare_exchange_weak(current, current + 1, Ordering::SeqCst, Ordering::Relaxed)
+            .is_ok()
+        {
+            return Some(InFlightSlot);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inflight_cap_denies_at_limit_and_recovers_on_drop() {
+        // Steer the shared counter to the cap, then confirm a new reserve is
+        // refused.
+        IN_FLIGHT.store(MAX_IN_FLIGHT, Ordering::SeqCst);
+        assert!(
+            reserve_attempt().is_none(),
+            "a reserve must be denied at the concurrency cap"
+        );
+        IN_FLIGHT.store(0, Ordering::SeqCst);
+
+        // A free slot is granted, tracked, and released on drop.
+        let slot = reserve_attempt().expect("a free slot must be granted");
+        assert_eq!(IN_FLIGHT.load(Ordering::SeqCst), 1);
+        drop(slot);
+        assert_eq!(
+            IN_FLIGHT.load(Ordering::SeqCst),
+            0,
+            "dropping the slot must release the reservation"
+        );
+    }
 }

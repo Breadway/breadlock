@@ -384,10 +384,9 @@ impl App {
             Stage::Prompt | Stage::Working => {
                 self.status_lbl.set_label("");
                 self.status_lbl.remove_css_class("error");
+                // `reset_to_username` dispatches the CancelSession itself, so
+                // we don't double-send it here.
                 self.reset_to_username();
-                if self.cmd_tx.send(greetd::Command::CancelSession).is_err() {
-                    self.show_error("Cannot reach greetd");
-                }
             }
         }
     }
@@ -416,6 +415,17 @@ impl App {
         self.stage = Stage::Username;
         self.username.clear();
         self.pam_status_held = false;
+        // Abort any greetd conversation still open server-side. Without this,
+        // the error/`show_error` reset path returns to the username entry but
+        // leaves greetd holding a half-done PAM conversation, so the next
+        // login attempt's CreateSession stacks on a stale session. On a
+        // broken channel we set the failure label directly rather than
+        // recursing into `show_error`, which would call back into
+        // `reset_to_username` forever.
+        if self.cmd_tx.send(greetd::Command::CancelSession).is_err() {
+            self.status_lbl.set_label("Cannot reach greetd");
+            self.status_lbl.add_css_class("error");
+        }
         if !self.sessions.is_empty() {
             self.entry.grab_focus();
         }

@@ -103,7 +103,11 @@ pub struct wl_egl_window {
 
 #[link(name = "wayland-egl")]
 extern "C" {
-    fn wl_egl_window_create(surface: *mut wl_surface, width: i32, height: i32) -> *mut wl_egl_window;
+    fn wl_egl_window_create(
+        surface: *mut wl_surface,
+        width: i32,
+        height: i32,
+    ) -> *mut wl_egl_window;
     fn wl_egl_window_resize(window: *mut wl_egl_window, width: i32, height: i32, dx: i32, dy: i32);
     fn wl_egl_window_destroy(window: *mut wl_egl_window);
 }
@@ -236,10 +240,16 @@ impl GpuRenderer {
         egl.initialize(display).ok()?;
         egl.bind_api(egl::OPENGL_ES_API).ok()?;
         let mut configs = Vec::with_capacity(1);
-        egl.choose_config(display, &EGL_ATTRIBS, &mut configs).ok()?;
+        egl.choose_config(display, &EGL_ATTRIBS, &mut configs)
+            .ok()?;
         let config = *configs.first()?;
         let context = egl
-            .create_context(display, config, None, &[egl::CONTEXT_CLIENT_VERSION, 2, egl::NONE])
+            .create_context(
+                display,
+                config,
+                None,
+                &[egl::CONTEXT_CLIENT_VERSION, 2, egl::NONE],
+            )
             .ok()?;
         // A 1x1 pbuffer is enough to make the context current for setup
         // before any real lock surface exists. The chosen config is
@@ -298,7 +308,9 @@ impl GpuRenderer {
         let wallpaper = match &bg_cfg.mode {
             BackgroundMode::Color => None,
             BackgroundMode::Image if bg_cfg.path.is_empty() => {
-                tracing::warn!("background.mode = \"image\" but background.path is empty, using solid color");
+                tracing::warn!(
+                    "background.mode = \"image\" but background.path is empty, using solid color"
+                );
                 None
             }
             BackgroundMode::Image => match Pixmap::load_png(&bg_cfg.path) {
@@ -324,9 +336,21 @@ impl GpuRenderer {
                             glow::TEXTURE_MIN_FILTER,
                             glow::LINEAR_MIPMAP_LINEAR as i32,
                         );
-                        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
-                        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-                        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+                        gl.tex_parameter_i32(
+                            glow::TEXTURE_2D,
+                            glow::TEXTURE_MAG_FILTER,
+                            glow::LINEAR as i32,
+                        );
+                        gl.tex_parameter_i32(
+                            glow::TEXTURE_2D,
+                            glow::TEXTURE_WRAP_S,
+                            glow::CLAMP_TO_EDGE as i32,
+                        );
+                        gl.tex_parameter_i32(
+                            glow::TEXTURE_2D,
+                            glow::TEXTURE_WRAP_T,
+                            glow::CLAMP_TO_EDGE as i32,
+                        );
                     }
                     Some(Wallpaper {
                         tex,
@@ -356,8 +380,16 @@ impl GpuRenderer {
                 glow::UNSIGNED_BYTE,
                 glow::PixelUnpackData::Slice(Some(&[255, 255, 255, 255])),
             );
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::NEAREST as i32,
+            );
         }
 
         let bg = breadlock_ui::theme::tiny_skia_color(&palette.background);
@@ -365,12 +397,28 @@ impl GpuRenderer {
 
         // Resolve all uniform locations up front, then drop the closure so
         // `gl` can move into the renderer.
-        let (u_screen, u_uv_scale, u_uv_offset, u_tex, u_color, u_dim_top, u_dim_bottom, u_veil_alpha, u_screen_h) = {
+        let (
+            u_screen,
+            u_uv_scale,
+            u_uv_offset,
+            u_tex,
+            u_color,
+            u_dim_top,
+            u_dim_bottom,
+            u_veil_alpha,
+            u_screen_h,
+        ) = {
             let loc = |p: glow::Program, n: &str| unsafe { gl.get_uniform_location(p, n) };
             (
                 [loc(bg_program, "u_screen"), loc(chrome_program, "u_screen")],
-                [loc(bg_program, "u_uv_scale"), loc(chrome_program, "u_uv_scale")],
-                [loc(bg_program, "u_uv_offset"), loc(chrome_program, "u_uv_offset")],
+                [
+                    loc(bg_program, "u_uv_scale"),
+                    loc(chrome_program, "u_uv_scale"),
+                ],
+                [
+                    loc(bg_program, "u_uv_offset"),
+                    loc(chrome_program, "u_uv_offset"),
+                ],
                 [loc(bg_program, "u_tex"), loc(chrome_program, "u_tex")],
                 loc(bg_program, "u_color"),
                 loc(bg_program, "u_dim_top"),
@@ -408,7 +456,12 @@ impl GpuRenderer {
 
     /// Wraps a lock surface's `wl_surface` in an EGL window + surface.
     /// Called once per surface from its first `configure`.
-    pub fn create_surface(&self, surface: &WlSurface, width: u32, height: u32) -> Option<GpuSurface> {
+    pub fn create_surface(
+        &self,
+        surface: &WlSurface,
+        width: u32,
+        height: u32,
+    ) -> Option<GpuSurface> {
         // SAFETY: the surface proxy is live (this is called from its
         // `configure` handler); the returned window is owned by us.
         let egl_window = unsafe {
@@ -424,8 +477,12 @@ impl GpuRenderer {
         }
         // SAFETY: `egl_window` is a valid wl_egl_window native window.
         let egl_surface = unsafe {
-            self.egl
-                .create_window_surface(self.display, self.config, egl_window as *mut c_void, None)
+            self.egl.create_window_surface(
+                self.display,
+                self.config,
+                egl_window as *mut c_void,
+                None,
+            )
         };
         let egl_surface = match egl_surface {
             Ok(s) => s,
@@ -467,7 +524,12 @@ impl GpuRenderer {
         }
         if self
             .egl
-            .make_current(self.display, Some(surface.egl_surface), Some(surface.egl_surface), Some(self.context))
+            .make_current(
+                self.display,
+                Some(surface.egl_surface),
+                Some(surface.egl_surface),
+                Some(self.context),
+            )
             .is_err()
         {
             tracing::warn!("eglMakeCurrent failed; skipping GPU frame");
@@ -477,7 +539,11 @@ impl GpuRenderer {
         unsafe { gl.viewport(0, 0, w as i32, h as i32) };
         self.draw_background(w, h, inputs);
         self.draw_chrome(surface, inputs, text);
-        if self.egl.swap_buffers(self.display, surface.egl_surface).is_err() {
+        if self
+            .egl
+            .swap_buffers(self.display, surface.egl_surface)
+            .is_err()
+        {
             tracing::warn!("eglSwapBuffers failed; skipping GPU frame");
             return false;
         }
@@ -505,7 +571,11 @@ impl GpuRenderer {
                 wf, 0.0, wf, hf, 0.0, hf,
             ];
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.quad_vbo));
-            gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, f32s_as_bytes(&verts), glow::DYNAMIC_DRAW);
+            gl.buffer_data_u8_slice(
+                glow::ARRAY_BUFFER,
+                f32s_as_bytes(&verts),
+                glow::DYNAMIC_DRAW,
+            );
 
             if let Some(loc) = self.u_screen[0].as_ref() {
                 gl.uniform_2_f32(Some(loc), wf, hf);
@@ -567,7 +637,12 @@ impl GpuRenderer {
         }
     }
 
-    fn draw_chrome(&mut self, surface: &mut GpuSurface, inputs: &FrameInputs, text: &mut TextRenderer) {
+    fn draw_chrome(
+        &mut self,
+        surface: &mut GpuSurface,
+        inputs: &FrameInputs,
+        text: &mut TextRenderer,
+    ) {
         let (w, h) = (surface.width, surface.height);
         let dirty = surface
             .chrome_pixmap
@@ -686,7 +761,11 @@ impl GpuRenderer {
                 xf0, yf0, xf1, yf0, xf0, yf1, //
                 xf1, yf0, xf1, yf1, xf0, yf1,
             ];
-            gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, f32s_as_bytes(&verts), glow::DYNAMIC_DRAW);
+            gl.buffer_data_u8_slice(
+                glow::ARRAY_BUFFER,
+                f32s_as_bytes(&verts),
+                glow::DYNAMIC_DRAW,
+            );
             if let Some(loc) = self.u_screen[1].as_ref() {
                 gl.uniform_2_f32(Some(loc), wf, hf);
             }
@@ -711,7 +790,12 @@ impl GpuRenderer {
 
 /// Visible source region of the wallpaper for the current pan phase — the
 /// same cover-fit + Ken Burns math as `background.rs`.
-fn pan_region(wp: (u32, u32), target: (u32, u32), ken_burns: bool, t_secs: f32) -> (f32, f32, f32, f32) {
+fn pan_region(
+    wp: (u32, u32),
+    target: (u32, u32),
+    ken_burns: bool,
+    t_secs: f32,
+) -> (f32, f32, f32, f32) {
     let (sw, sh) = (wp.0 as f32, wp.1 as f32);
     let (tw, th) = (target.0 as f32, target.1 as f32);
     let cover = (tw / sw).max(th / sh);
@@ -727,7 +811,10 @@ fn pan_region(wp: (u32, u32), target: (u32, u32), ken_burns: bool, t_secs: f32) 
             -pan_y * (0.5 + 0.5 * phase.cos()),
         )
     } else {
-        (0.0, 0.0)
+        // Static wallpaper: center the crop, matching the software path in
+        // `background.rs` (which also samples the static visible region from
+        // the middle of the cover-fit overhang rather than its top-left).
+        (-pan_x * 0.5, -pan_y * 0.5)
     };
     (-tx, -ty, scaled_w, scaled_h)
 }
@@ -807,7 +894,12 @@ mod tests {
     /// re-implemented here so the GPU `pan_region` can be checked against it.
     /// Software rounds the scaled dims to pixels; GPU keeps floats, so
     /// compare with a 1px tolerance.
-    fn software_pan(wp: (u32, u32), target: (u32, u32), ken_burns: bool, t_secs: f32) -> (f32, f32) {
+    fn software_pan(
+        wp: (u32, u32),
+        target: (u32, u32),
+        ken_burns: bool,
+        t_secs: f32,
+    ) -> (f32, f32) {
         let (sw, sh) = (wp.0 as f32, wp.1 as f32);
         let (tw, th) = (target.0 as f32, target.1 as f32);
         let cover = (tw / sw).max(th / sh);
@@ -833,8 +925,21 @@ mod tests {
         let wp = (3840, 2160);
         let target = (1920, 1200);
         let (sx, sy, sw, sh) = pan_region(wp, target, false, 123.4);
-        assert_eq!(sx, 0.0, "no ken burns: no horizontal pan");
-        assert_eq!(sy, 0.0, "no ken burns: no vertical pan");
+        // No ken burns: the visible window is centred in the cover-fit
+        // overhang, matching the software `Background::Image::paint` path
+        // (this regressed to a top-left crop before the centering fix).
+        let pan_x = sw - 1920.0;
+        let pan_y = sh - 1200.0;
+        assert!(
+            (sx - pan_x * 0.5).abs() < 0.01,
+            "static x crop should be centred, got {sx} vs {}",
+            pan_x * 0.5
+        );
+        assert!(
+            (sy - pan_y * 0.5).abs() < 0.01,
+            "static y crop should be centred, got {sy} vs {}",
+            pan_y * 0.5
+        );
         // Cover fit: the scaled region covers the target in both axes.
         assert!(sw >= 1920.0 && sh >= 1200.0);
         // And it's the tightest cover: at least one axis exactly matches.
@@ -892,8 +997,14 @@ mod tests {
         let pan_x = sw - 1920.0;
         let cover = (1920.0f32 / 3840.0).max(1200.0f32 / 2160.0);
         let pan_y = (2160.0 * (cover * KENBURNS_ZOOM)).round() - 1200.0;
-        assert!((sx0 - pan_x * 0.5).abs() < 0.5, "at t=0 x should be half-panned, got {sx0}");
-        assert!((sy0 - pan_y).abs() < 0.5, "at t=0 y should be fully panned (top), got {sy0}");
+        assert!(
+            (sx0 - pan_x * 0.5).abs() < 0.5,
+            "at t=0 x should be half-panned, got {sx0}"
+        );
+        assert!(
+            (sy0 - pan_y).abs() < 0.5,
+            "at t=0 y should be fully panned (top), got {sy0}"
+        );
         // Half a period later it has returned to the same spot.
         let (sx1, sy1, _, _) = pan_region(wp, target, true, KENBURNS_PERIOD_S);
         assert!((sx1 - sx0).abs() < 0.01 && (sy1 - sy0).abs() < 0.01);
@@ -925,8 +1036,15 @@ mod tests {
         ]
         .concat();
         for name in [
-            "u_screen", "u_uv_scale", "u_uv_offset", "u_tex", "u_color",
-            "u_dim_top", "u_dim_bottom", "u_veil_alpha", "u_screen_h",
+            "u_screen",
+            "u_uv_scale",
+            "u_uv_offset",
+            "u_tex",
+            "u_color",
+            "u_dim_top",
+            "u_dim_bottom",
+            "u_veil_alpha",
+            "u_screen_h",
         ] {
             assert!(
                 declared.iter().any(|d| d == name),
@@ -943,7 +1061,8 @@ mod tests {
     /// top) exactly, or the GPU veil renders upside-down.
     fn shader_dim_at(frag_y: f32, h: f32) -> f32 {
         let row = 1.0 - frag_y / h; // 1 at bottom (frag_y=0), 0 at top
-        crate::render::DIM_ALPHA_TOP + (crate::render::DIM_ALPHA_BOTTOM - crate::render::DIM_ALPHA_TOP) * row
+        crate::render::DIM_ALPHA_TOP
+            + (crate::render::DIM_ALPHA_BOTTOM - crate::render::DIM_ALPHA_TOP) * row
     }
 
     #[test]
@@ -973,8 +1092,16 @@ mod tests {
 
     #[test]
     fn egl_attribs_are_none_terminated_pairs() {
-        assert_eq!(EGL_ATTRIBS.len() % 2, 1, "attribs must be key/value pairs + NONE");
-        assert_eq!(*EGL_ATTRIBS.last().unwrap(), egl::NONE, "attrib list must be NONE-terminated");
+        assert_eq!(
+            EGL_ATTRIBS.len() % 2,
+            1,
+            "attribs must be key/value pairs + NONE"
+        );
+        assert_eq!(
+            *EGL_ATTRIBS.last().unwrap(),
+            egl::NONE,
+            "attrib list must be NONE-terminated"
+        );
         let mut saw_window = false;
         let mut saw_es2 = false;
         let mut saw_pbuffer = false;

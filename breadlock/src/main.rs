@@ -170,52 +170,55 @@ fn run_lock() {
     let loop_handle = event_loop.handle();
 
     let auth_result_qh = qh.clone();
-    let auth_tx = auth::register(&loop_handle, move |state: &mut AppState, generation, result| {
-        if generation != state.auth_generation {
-            return;
-        }
-        match result {
-            Ok(()) => {
-                // Keep the lock surfaces up and fade the overlay out.
-                // Compositor unlock() runs only after UNLOCK_MS — dying
-                // mid-fade is fail-secure (session stays locked).
-                tracing::info!("authenticated, fading out");
-                state.failed_attempts = 0;
-                state.auth_state = AuthState::Idle;
-                state.checking_started = None;
-                if state.unlocking.is_none() {
-                    state.unlocking = Some(std::time::Instant::now());
-                }
+    let auth_tx = auth::register(
+        &loop_handle,
+        move |state: &mut AppState, generation, result| {
+            if generation != state.auth_generation {
+                return;
             }
-            Err(err) => {
-                match err {
-                    // A broken PAM setup (missing/invalid /etc/pam.d/breadlock,
-                    // context init failure) is a config problem, not a typo —
-                    // rendering it identically to "wrong password" would lock
-                    // the user out with zero indication of what's actually
-                    // wrong. Log loudly and show a distinct on-screen message.
-                    auth::AuthError::ContextInit => {
-                        tracing::error!(
-                            %err,
-                            "PAM context initialization failed — check /etc/pam.d/breadlock exists and is valid; authentication cannot succeed until this is fixed"
-                        );
-                        state.enter_fail(AuthState::ConfigError);
-                    }
-                    auth::AuthError::Authenticate => {
-                        tracing::warn!(%err, "authentication failed");
-                        state.failed_attempts = state.failed_attempts.saturating_add(1);
-                        state.enter_fail(AuthState::Failed);
-                    }
-                    auth::AuthError::AccountInvalid => {
-                        tracing::warn!(%err, "account locked or expired");
-                        state.enter_fail(AuthState::AccountInvalid);
+            match result {
+                Ok(()) => {
+                    // Keep the lock surfaces up and fade the overlay out.
+                    // Compositor unlock() runs only after UNLOCK_MS — dying
+                    // mid-fade is fail-secure (session stays locked).
+                    tracing::info!("authenticated, fading out");
+                    state.failed_attempts = 0;
+                    state.auth_state = AuthState::Idle;
+                    state.checking_started = None;
+                    if state.unlocking.is_none() {
+                        state.unlocking = Some(std::time::Instant::now());
                     }
                 }
-                state.schedule_clear_failed(auth_result_qh.clone());
+                Err(err) => {
+                    match err {
+                        // A broken PAM setup (missing/invalid /etc/pam.d/breadlock,
+                        // context init failure) is a config problem, not a typo —
+                        // rendering it identically to "wrong password" would lock
+                        // the user out with zero indication of what's actually
+                        // wrong. Log loudly and show a distinct on-screen message.
+                        auth::AuthError::ContextInit => {
+                            tracing::error!(
+                                %err,
+                                "PAM context initialization failed — check /etc/pam.d/breadlock exists and is valid; authentication cannot succeed until this is fixed"
+                            );
+                            state.enter_fail(AuthState::ConfigError);
+                        }
+                        auth::AuthError::Authenticate => {
+                            tracing::warn!(%err, "authentication failed");
+                            state.failed_attempts = state.failed_attempts.saturating_add(1);
+                            state.enter_fail(AuthState::Failed);
+                        }
+                        auth::AuthError::AccountInvalid => {
+                            tracing::warn!(%err, "account locked or expired");
+                            state.enter_fail(AuthState::AccountInvalid);
+                        }
+                    }
+                    state.schedule_clear_failed(auth_result_qh.clone());
+                }
             }
-        }
-        state.redraw_all(&auth_result_qh);
-    });
+            state.redraw_all(&auth_result_qh);
+        },
+    );
 
     // D-Bus status (now-playing / battery): the poller posts snapshots here
     // and each one triggers a redraw so the line under the clock stays live.
