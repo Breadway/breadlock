@@ -33,6 +33,7 @@ tiny-skia = "0.12"
 khronos-egl = { version = "6", features = ["dynamic"] }
 glow = "0.16"
 chrono = "0.4"
+notify = "7"
 zbus = "4"
 pam-client2 = { version = "0.5", default-features = false }
 zeroize = { version = "1", features = ["std"] }
