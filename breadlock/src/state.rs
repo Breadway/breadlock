@@ -82,6 +82,20 @@ pub struct AppState {
 
     pub config: Config,
     pub palette: breadlock_ui::theme::Palette,
+    /// Per-output resolved palette cache, keyed by `wl_output` name. Filled
+    /// lazily by [`AppState::palette_for_surface`] so a redraw doesn't re-read
+    /// and re-parse `palettes/<output>.json` from disk on every frame. Cleared
+    /// wholesale by the [`crate::theme_watch`] callback when pywal regenerates
+    /// the palette files. `RefCell` because `palette_for_surface` runs from
+    /// the `&self`-shaped middle of `redraw_surface` (other `&self` borrows
+    /// are live), but only ever on the single event-loop thread.
+    pub output_palettes:
+        std::cell::RefCell<std::collections::HashMap<String, breadlock_ui::theme::Palette>>,
+    /// File watcher that invalidates [`AppState::output_palettes`] on a
+    /// palette change. `None` when the watch could not be armed — then
+    /// `palette_for_surface` falls back to reading from disk each call so a
+    /// live palette change is still reflected (just less cheaply).
+    pub theme_watch: Option<crate::theme_watch::ThemeWatch>,
     pub background: Background,
     /// GPU background renderer (EGL/GLES2). `None` falls back to the
     /// fully-software path.
@@ -490,14 +504,43 @@ impl AppState {
         surface.wl_surface().commit();
     }
 
+    /// Resolve the palette for the monitor showing `surface`, reading it from
+    /// the per-output cache (populated on first use) rather than parsing the
+    /// on-disk JSON every frame. Falls back to the global palette when the
+    /// output has no name, and — if the theme watcher isn't armed — to an
+    /// uncached per-call disk read so a palette change is still picked up.
+    /// Palette for the monitor showing `surface`. Served from the per-output
+    /// cache (populated on first use, invalidated by the theme watcher) so a
+    /// redraw doesn't parse `palettes/<output>.json` off disk every frame.
+    /// Falls back to the global palette when the output has no name, and to an
+    /// uncached per-call read when the theme watcher couldn't be armed.
     fn palette_for_surface(&self, surface: &SessionLockSurface) -> breadlock_ui::theme::Palette {
-        self.surfaces
+        let name = self
+            .surfaces
             .iter()
             .find(|s| s.surface.wl_surface() == surface.wl_surface())
             .and_then(|s| self.output_state.info(&s.output))
-            .and_then(|info| info.name)
-            .map(|name| breadlock_ui::theme::load_palette_for(&name))
-            .unwrap_or_else(|| self.palette.clone())
+            .and_then(|info| info.name);
+        let Some(name) = name else {
+            return self.palette.clone();
+        };
+        if self.theme_watch.is_none() {
+            return breadlock_ui::theme::load_palette_for(&name);
+        }
+        if let Some(cached) = self.output_palettes.borrow().get(&name) {
+            return cached.clone();
+        }
+        let palette = breadlock_ui::theme::load_palette_for(&name);
+        self.output_palettes
+            .borrow_mut()
+            .insert(name, palette.clone());
+        palette
+    }
+
+    /// Drop every cached per-output palette so the next redraw re-reads them.
+    /// Called by the [`crate::theme_watch`] callback on a pywal regeneration.
+    pub fn invalidate_palette_cache(&self) {
+        self.output_palettes.borrow_mut().clear();
     }
 
     /// Redraws every currently-configured surface — used for the clock tick
