@@ -11,7 +11,7 @@ Scope: this file covers *repo hygiene* — branching, remotes, CI, cleanup. It i
 - Releases are `v*` tags. `.forgejo/workflows/package.yml` builds the `[breadway]` pacman package. There are no bakery tracks (`dev`/`beta`/`stable` indexes) for this repo.
 
 ## Remotes
-- `origin` — Forgejo (`git.breadway.dev` via Hestia, SSH) — authoritative. Push here.
+- `origin` — Forgejo (`git.breadway.dev`, SSH) — authoritative. Push here.
 - `github` — GitHub mirror (push-mirror; do not push to it by hand).
 
 ## CI
