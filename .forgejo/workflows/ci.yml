@@ -7,7 +7,7 @@ on:
 
 jobs:
   check:
-    runs-on: [self-hosted, hestia]
+    runs-on: [self-hosted]
     # Same container/no-JS-actions convention as package.yml: the archlinux
     # image has no Node, so every step is a shell command that installs its
     # own toolchain and clones manually. Keeps the gate identical to how

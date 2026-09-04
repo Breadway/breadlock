@@ -6,7 +6,7 @@ on:
 
 jobs:
   package:
-    runs-on: [self-hosted, hestia]
+    runs-on: [self-hosted]
     # Forgejo's Arch package registry does not GPG-sign a pacman db.
     # BOS ISO [breadway] stays SigLevel = Never until a signed db exists.
     # Do not flip that here — flipping without a signed db breaks pacman.
