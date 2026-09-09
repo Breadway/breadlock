@@ -1,6 +1,6 @@
 //! Lock-screen background: a solid palette color, or a static image scaled
 //! to cover the surface. Live blur-of-desktop (hyprlock-style) is a v2
-//! follow-up (see README) — `blur = true` is accepted but only logs a
+//! follow-up (see README); `blur = true` is accepted but only logs a
 //! warning in v1. `ken_burns = true` adds a slow, continuous pan+zoom to
 //! image backgrounds (opt-in: it keeps the background redrawing at a low
 //! frame rate while locked).
@@ -8,7 +8,7 @@
 //! The renderer is fully software (tiny-skia), so every frame redraws the
 //! whole surface. Rescaling the *source* wallpaper on every frame is
 //! prohibitively expensive for large images (a 4K source at output size took
-//! ~50 ms/frame — choppy at any cadence), so the source is pre-scaled once
+//! ~50 ms/frame, choppy at any cadence), so the source is pre-scaled once
 //! per output size into a cache and each frame is a translate-only blit.
 
 use breadlock_ui::config::{Background as BackgroundConfig, BackgroundMode};
@@ -19,7 +19,7 @@ use tiny_skia::{Pixmap, PixmapPaint, Transform};
 /// One full Ken Burns pan+zoom cycle, in seconds. Deliberately slow so the
 /// motion reads as a gentle drift rather than a slideshow.
 const KENBURNS_PERIOD_S: f32 = 90.0;
-/// Extra zoom beyond plain cover-fit — gives the pan room to travel without
+/// Extra zoom beyond plain cover-fit: gives the pan room to travel without
 /// ever exposing the image edges.
 const KENBURNS_ZOOM: f32 = 1.06;
 
@@ -31,7 +31,7 @@ pub enum Background {
 /// A wallpaper with a lazily-built, output-sized copy. The first `paint` for
 /// a given output size does one downscale; every frame after that blits the
 /// cached copy with at most a translation (the Ken Burns pan).
-/// Cap on cached scaled copies — enough for a typical multi-monitor setup
+/// Cap on cached scaled copies: enough for a typical multi-monitor setup
 /// without unbounded growth if the compositor sends many sizes.
 const SCALED_CACHE_SLOTS: usize = 4;
 
@@ -47,10 +47,10 @@ pub struct ImageBg {
 
 struct ScaledBg {
     /// `source` pre-scaled to cover-fit (× Ken Burns zoom when enabled) and
-    /// sized to the output — same size or larger, so drawing it needs no
+    /// sized to the output: same size or larger, so drawing it needs no
     /// per-frame scaling.
     pixmap: Pixmap,
-    /// How many pixels the scaled image overhangs each axis — the pan room.
+    /// How many pixels the scaled image overhangs each axis: the pan room.
     pan_x: f32,
     pan_y: f32,
     target_w: u32,
@@ -68,7 +68,7 @@ struct ScaledBg {
 /// (the 60 fps animation frames, where the pan moves < 0.2 px anyway), the
 /// whole thing collapses to row memcpys. The bilinear path is an integer
 /// fixed-point (16.16) loop with the edge clamping hoisted out of the hot
-/// columns/rows — far cheaper than
+/// columns/rows: far cheaper than
 /// [`tiny_skia::Pixmap::draw_pixmap`], which rasterizes every pixel through
 /// its general pattern pipeline.
 fn blit_translate(target: &mut Pixmap, src: &Pixmap, dx: f32, dy: f32, bilinear: bool) {
@@ -108,7 +108,7 @@ fn blit_translate(target: &mut Pixmap, src: &Pixmap, dx: f32, dy: f32, bilinear:
     let shm1 = sh - 1;
 
     // Per-channel bilinear in packed u32 (one load per pixel instead of four,
-    // one store instead of four — the loop is latency-bound). Each byte's
+    // one store instead of four; the loop is latency-bound). Each byte's
     // products stay well under 2^32, so lanes never interfere.
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
@@ -247,7 +247,7 @@ impl Background {
         if cfg.blur {
             tracing::warn!(
                 "background.blur is not implemented yet (planned v2 feature, needs a wlr-screencopy \
-                 capture) — showing the configured background unblurred"
+                 capture); showing the configured background unblurred"
             );
         }
 
@@ -279,7 +279,7 @@ impl Background {
     }
 
     /// Paints this background into `target`, cover-fit (scaled uniformly to
-    /// fill the surface, cropping any overflow — never letterboxed). `t_secs`
+    /// fill the surface, cropping any overflow; never letterboxed). `t_secs`
     /// is the monotonic clock: with Ken Burns enabled the image slowly pans
     /// and zooms along a smooth Lissajous-ish drift, so consecutive frames
     /// differ slightly but never jump.
@@ -321,7 +321,7 @@ impl Background {
                     let scaled_h = (sh * scale).round().max(1.0) as u32;
                     let Some(mut pixmap) = Pixmap::new(scaled_w, scaled_h) else {
                         tracing::error!(
-                            "failed to allocate {scaled_w}x{scaled_h} scaled wallpaper — falling back to a palette-color background"
+                            "failed to allocate {scaled_w}x{scaled_h} scaled wallpaper: falling back to a palette-color background"
                         );
                         drop(cache);
                         target.fill(breadlock_ui::theme::tiny_skia_color(
@@ -378,7 +378,7 @@ impl Background {
                 // draw is a 1:1 copy with at most a translation. `draw_pixmap`
                 // runs the full raster pipeline per pixel (~20 ms for a
                 // full-screen layer), which is the dominant software-render
-                // cost — so do the blit directly instead: rows are memcpy'd
+                // cost, so do the blit directly instead: rows are memcpy'd
                 // (nearest sampling on an already-correct-size image is
                 // pixel-identical, and the pan offsets quantize the same way
                 // tiny-skia's nearest filter does).
@@ -392,7 +392,7 @@ impl Background {
 mod tests {
     use super::*;
 
-    /// A 4x4 pixmap whose pixel at (x, y) is `(x * 63, y * 63, 0, 255)` —
+    /// A 4x4 pixmap whose pixel at (x, y) is `(x * 63, y * 63, 0, 255)`:
     /// every pixel is distinct, so a shifted copy is easy to assert.
     fn source_grid() -> Pixmap {
         let mut p = Pixmap::new(4, 4).unwrap();
@@ -460,7 +460,7 @@ mod tests {
     #[test]
     fn blit_translate_clamps_each_axis_independently() {
         // dx over-clamps to the left edge while dy lands inside the source's
-        // overhang, so the visible window is src[x 0..2, y 2..4] — each axis
+        // overhang, so the visible window is src[x 0..2, y 2..4]: each axis
         // must clamp in isolation.
         let src = source_grid();
         let mut dst = Pixmap::new(2, 2).unwrap();
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn ken_burns_pan_never_exposes_edges() {
         // A small solid-color image panned through a full cycle must cover
-        // the whole target at every phase — no black borders.
+        // the whole target at every phase: no black borders.
         let mut source = Pixmap::new(80, 40).unwrap();
         source.fill(tiny_skia::Color::from_rgba8(200, 30, 30, 255));
         let bg = Background::Image(ImageBg {

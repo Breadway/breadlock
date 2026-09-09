@@ -11,7 +11,7 @@ name = "breadlock"
 path = "src/main.rs"
 
 # Dev-only harness: exercises the PAM auth flow against a typed password with
-# no Wayland surface involved at all — see the "safe verification" plan in
+# no Wayland surface involved at all; see the "safe verification" plan in
 # the repo's design notes. Not installed by the package.
 [[bin]]
 name = "breadlock-auth-check"

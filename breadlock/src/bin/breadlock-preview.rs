@@ -1,8 +1,8 @@
 //! Dev-only harness: renders the breadlock lock-screen motion system to a
 //! folder of PNGs so the new animations can be eyeballed without locking a
 //! session (or even touching Wayland). Every scene below pins concrete
-//! progress values into `render::FrameInputs` — the same struct the real
-//! locker feeds from live timestamps — so what you see here is exactly what
+//! progress values into `render::FrameInputs`: the same struct the real
+//! locker feeds from live timestamps, so what you see here is exactly what
 //! `state.rs` computes at runtime.
 //!
 //! Not installed by the package; run from a build tree with
@@ -93,7 +93,7 @@ impl Default for Scene {
     }
 }
 
-/// `--time [WxH] [frames] [wallpaper.png]` — renders the real compose() path
+/// `--time [WxH] [frames] [wallpaper.png]`: renders the real compose() path
 /// (image background + Ken Burns, full chrome) in a loop and prints per-frame
 /// timings, so the software renderer's cost can be measured without Wayland.
 fn bench(args: &[String]) {
@@ -286,7 +286,7 @@ fn main() {
             ..Scene::default()
         },
         // ---- Checking: status mid slide-in. Live submit() zeros the secret
-        // so password_len is 0 — don't fake a filled pill here.
+        // so password_len is 0: don't fake a filled pill here.
         Scene {
             name: "08-checking",
             status: Some("Checking…"),
@@ -360,13 +360,13 @@ fn main() {
             password_len: 6,
             failed: true,
             failed_t: 0.8,
-            status: Some("Wrong password — 3 failed attempts"),
+            status: Some("Wrong password: 3 failed attempts"),
             ..Scene::default()
         },
         // ---- D-Bus status: now-playing + battery under the clock.
         Scene {
             name: "18-status-info",
-            info: "The War on Drugs — Red Eyes  ·  87% · charging",
+            info: "The War on Drugs, Red Eyes  ·  87% · charging",
             ..Scene::default()
         },
     ];

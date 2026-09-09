@@ -1,7 +1,7 @@
 //! Software-rendering primitives shared by `breadlock`'s frame composition:
 //! rounded-rect paths (radius tokens from [`bread_theme::tokens`]) and text
 //! layout/rasterization via `cosmic-text`, blitted into a `tiny-skia`
-//! `Pixmap`. Only linked into `breadlock` — `breadgreet` draws through GTK/CSS
+//! `Pixmap`. Only linked into `breadlock`; `breadgreet` draws through GTK/CSS
 //! instead and doesn't need a font-shaping stack.
 
 pub use bread_theme::tokens;
@@ -35,7 +35,7 @@ pub struct TextRenderer {
     font_system: FontSystem,
     swash_cache: SwashCache,
     /// Exact glyph-pixel span `(top, height)` per unique `(text, family,
-    /// size, weight)` — see [`Self::measure_box`]. Keyed by size in
+    /// size, weight)`; see [`Self::measure_box`]. Keyed by size in
     /// centipixels so fractional sizes don't thrash the cache.
     boxes: HashMap<(String, String, u32, u16), (f32, f32)>,
     /// Whether `Family::Name(family)` resolved to an installed face. Missing
@@ -114,7 +114,7 @@ impl TextRenderer {
     /// `[y0, y1]` needs `origin_y = y0 + (h - height) / 2 - top`.
     ///
     /// Measured exactly by rendering the line once into a tiny offscreen
-    /// pixmap and scanning it, then cached — lock-screen text changes rarely
+    /// pixmap and scanning it, then cached: lock-screen text changes rarely
     /// (clock per minute, date per day, static hints once), so the one-off
     /// cost is negligible and the result is correct for any font.
     pub fn measure_box(&mut self, text: &str, family: &str, size_px: f32) -> (f32, f32) {
@@ -177,7 +177,7 @@ impl TextRenderer {
     }
 
     /// Width in pixels `text` would occupy if drawn via [`Self::draw_line`]
-    /// with the same `family`/`size_px` — use to center text before drawing.
+    /// with the same `family`/`size_px`; use to center text before drawing.
     pub fn measure_line(&mut self, text: &str, family: &str, size_px: f32) -> f32 {
         self.measure_line_weighted(text, family, size_px, Weight::NORMAL)
     }
@@ -243,7 +243,7 @@ impl TextRenderer {
 
         let c8 = color.to_color_u8();
         // cosmic-text's glyph-Mask rendering drops the base color's alpha
-        // entirely — its swash `with_pixels` uses the glyph coverage as the
+        // entirely: its swash `with_pixels` uses the glyph coverage as the
         // output alpha (see the "TODO: blend base alpha?" in its source), so
         // a translucent text color would render fully opaque. Fold the
         // requested alpha back in at blend time below; RGB stays straight.
@@ -293,7 +293,7 @@ impl TextRenderer {
 ///   (the exact formula below, kept byte-identical to the historic one).
 /// - **GPU chrome** (`compose_chrome`): text is drawn into a *transparent*
 ///   pixmap that is later composited over the GPU background, so glyph
-///   edges must keep real alpha — a forced-255 blend here would make every
+///   edges must keep real alpha: a forced-255 blend here would make every
 ///   glyph opaque and, composited over the background, visibly wrong.
 ///
 /// Premultiplied source-over: `out = src_pm + dst_pm * (1 - src_a)`, which
@@ -307,7 +307,7 @@ fn blend_over(pixmap: &mut Pixmap, x: u32, y: u32, r: u8, g: u8, b: u8, a: u8) {
     let sa = a as u32;
     if dst.alpha() == 255 {
         // Opaque destination: the classic exact blend. RGB mixes toward the
-        // source, alpha stays 255 — identical to the pre-split behavior so
+        // source, alpha stays 255: identical to the pre-split behavior so
         // the single-pass software path doesn't move a single pixel.
         let mix = |s: u8, d: u8| -> u8 { ((s as u32 * sa + d as u32 * (255 - sa)) / 255) as u8 };
         if let Some(blended) = PremultipliedColorU8::from_rgba(
@@ -367,7 +367,7 @@ mod tests {
             2.0,
             2.0,
         );
-        // No panic and the pixmap remains fully opaque is the property under test —
+        // No panic and the pixmap remains fully opaque is the property under test;
         // exact glyph coverage depends on whatever fonts are installed on the CI host.
         assert!(pixmap.pixels().iter().all(|p| p.alpha() == 255));
     }
@@ -376,7 +376,7 @@ mod tests {
     fn draw_line_respects_color_alpha() {
         // Regression: cosmic-text's glyph-Mask path drops the base color's
         // alpha (coverage becomes the only alpha), so translucent text used to
-        // render fully opaque — which broke every text fade on the lock screen
+        // render fully opaque, which broke every text fade on the lock screen
         // (clock/date/hint/status never faded during appear/unlock).
         let mut renderer = TextRenderer::new();
 
@@ -446,7 +446,7 @@ mod tests {
             0.0,
         );
         // Full-coverage glyph cores are legitimately opaque, but the AA
-        // edges must carry real intermediate alphas — the old forced-255
+        // edges must carry real intermediate alphas: the old forced-255
         // blend made *every* drawn pixel (edges included) fully opaque.
         let has_edge = t.pixels().iter().any(|p| p.alpha() > 0 && p.alpha() < 255);
         assert!(

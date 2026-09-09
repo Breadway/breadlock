@@ -49,7 +49,7 @@ impl Default for Sessions {
 /// path is checked first; XDG is the fallback for local dev/testing under a
 /// normal user session.
 ///
-/// `$BREADGREET_CONFIG` overrides both — an explicit file to load, used by
+/// `$BREADGREET_CONFIG` overrides both: an explicit file to load, used by
 /// `scripts/preview.sh` so a preview doesn't have to touch the real
 /// `/etc/greetd/breadgreet.toml`.
 pub fn load() -> Config {

@@ -1,5 +1,5 @@
 //! Blocking PAM authentication. libpam's conversation callback is synchronous
-//! FFI, so [`check`] must never be called on the render/event-loop thread —
+//! FFI, so [`check`] must never be called on the render/event-loop thread;
 //! see [`super`] for the thread hand-off.
 
 use pam_client2::conv_mock::Conversation;
@@ -7,7 +7,7 @@ use pam_client2::{Context, Flag};
 use std::ffi::CStr;
 use zeroize::Zeroize;
 
-/// The PAM service name — matches `/etc/pam.d/breadlock`
+/// The PAM service name: matches `/etc/pam.d/breadlock`
 /// (packaging/pam.d/breadlock), which is what actually determines the auth
 /// stack (pam_unix, pam_faillock, etc.). This string is just the lookup key.
 const SERVICE: &str = "breadlock";
@@ -23,11 +23,11 @@ pub enum AuthError {
 }
 
 /// Verifies `password` for `username` via PAM. Runs `authenticate` +
-/// `acct_mgmt` (no `open_session` — the graphical session is already open;
+/// `acct_mgmt` (no `open_session`; the graphical session is already open;
 /// this only re-proves who's sitting at the keyboard).
 pub fn check(username: &str, password: &str) -> Result<(), AuthError> {
     // `Conversation::with_credentials` copies `password` into its own
-    // `String` field (it has to — PAM's conversation callback is invoked
+    // `String` field (it has to: PAM's conversation callback is invoked
     // later, synchronously, by libpam via FFI). That struct has no Drop/
     // zeroize of its own, so we reach back in and zero it explicitly below
     // before `ctx` (and the conversation it owns) is dropped.

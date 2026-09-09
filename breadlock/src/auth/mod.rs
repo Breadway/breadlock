@@ -44,7 +44,7 @@ pub fn register<Data: 'static>(
 /// Spawns a PAM check for `username`/`password` on its own thread; the
 /// outcome arrives later as an event on the loop registered via
 /// [`register`]. `password` is moved in and dropped as soon as the PAM
-/// conversation consumes it — it is never logged. It's a `Zeroizing<String>`
+/// conversation consumes it; it is never logged. It's a `Zeroizing<String>`
 /// so the buffer is wiped the moment it goes out of scope at the end of this
 /// closure, rather than just deallocated with the bytes intact.
 ///
@@ -58,7 +58,7 @@ pub fn spawn_check(
 ) {
     // Bound simultaneously-running PAM calls. libpam can't be cancelled, so a
     // wedged module would otherwise spawn one uncancellable thread per retry
-    // (each pinned holding a `Zeroizing` password buffer) with no reclaim — a
+    // (each pinned holding a `Zeroizing` password buffer) with no reclaim: a
     // rapid retry against a stuck backend could grow threads without bound.
     let Some(slot) = reserve_attempt() else {
         tracing::warn!(

@@ -78,7 +78,7 @@ impl OutputHandler for AppState {
     }
 
     /// A monitor appeared. If we're already locked, give it a lock surface
-    /// too — the initial set (for outputs present at lock time) is created
+    /// too: the initial set (for outputs present at lock time) is created
     /// once in `main`, right after `SessionLockState::lock`.
     fn new_output(
         &mut self,
@@ -118,7 +118,7 @@ impl OutputHandler for AppState {
     }
 
     /// A monitor disappeared (unplug, or Hyprland dropping/recreating it on
-    /// a mode change). Drop the lock surface tied to it — otherwise
+    /// a mode change). Drop the lock surface tied to it, otherwise
     /// `surfaces` only ever grows across hotplug cycles and `redraw_all`
     /// keeps trying to commit to a surface whose output is gone.
     fn output_destroyed(

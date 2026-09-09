@@ -37,7 +37,7 @@ impl Default for Status {
 #[serde(default)]
 pub struct Input {
     /// How long the red "wrong password" UI stays up. Input is not blocked
-    /// during this window — typing or Escape clears it immediately.
+    /// during this window; typing or Escape clears it immediately.
     pub fail_timeout_ms: u64,
     /// Hold `Tab` to reveal the typed password as plain characters instead
     /// of dots. Off by default: plaintext would sit in compositor buffers
@@ -60,7 +60,7 @@ impl Default for Input {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Animation {
-    /// Subtle glow pulse on the password pill every few seconds — proves the
+    /// Subtle glow pulse on the password pill every few seconds: proves the
     /// screen is live, not frozen. Runs only during a short active window of
     /// each cycle (see `BREATHE_*` in render.rs).
     pub breathe: bool,

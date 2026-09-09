@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>breadlock × breadgreet — style &amp; motion sketch</title>
+<title>breadlock × breadgreet: style &amp; motion sketch</title>
 <style>
   /* ============================================================
-     Design tokens — mirrors bread-theme (BREAD_DESIGN_SYSTEM.md)
+     Design tokens: mirrors bread-theme (BREAD_DESIGN_SYSTEM.md)
      bg/surface/overlay/foreground are the fixed BOS dark base;
      color1-6 are pywal-derived accents. Two palettes shown:
      "bread"  = curated bread-toned defaults (fresh install)
@@ -337,7 +337,7 @@
 
 <header class="maxw">
   <div class="meta">
-    <h1>breadlock × breadgreet — style &amp; motion sketch</h1>
+    <h1>breadlock × breadgreet: style &amp; motion sketch</h1>
     <div class="palette-toggle" id="paletteToggle">
       <button data-palette="bread" class="active">Bread default</button>
       <button data-palette="tokyo">Pywal (Tokyo Night)</button>
@@ -402,7 +402,7 @@
             <div class="spinner"></div>
             <div class="srow">
               <span class="icon"></span>
-              <span class="label">bos — Hyprland <span class="badge-new">icon</span></span>
+              <span class="label">bos: Hyprland <span class="badge-new">icon</span></span>
               <span class="chev">▾</span>
             </div>
           </div>
@@ -433,14 +433,14 @@
     <div class="tile" data-tile="dotpop">
       <div class="tname">Dot pop + caret <span class="tag S">S</span></div>
       <div class="tscreen"><div class="tpill"><i></i><i></i><i></i><span class="tc"></span></div></div>
-      <div class="tnote">Newest password dot scales in with overshoot; a blinking caret marks where you're typing. Today dots just appear — <code>render.rs</code> dot loop.</div>
+      <div class="tnote">Newest password dot scales in with overshoot; a blinking caret marks where you're typing. Today dots just appear: <code>render.rs</code> dot loop.</div>
       <button class="replay" data-replay="tile-dotpop">Replay</button>
     </div>
 
     <div class="tile" data-tile="shake">
       <div class="tname">Wrong-password shake <span class="tag S">S</span></div>
       <div class="tscreen"><div class="tpill"><i></i><i></i><i></i></div><div class="tstatus">Wrong password</div></div>
-      <div class="tnote">The classic, currently reserved for v2 — failure is just a red pill today. Damped 8px shake, red fill, auto-clear after <code>fail_timeout_ms</code>.</div>
+      <div class="tnote">The classic, currently reserved for v2; failure is just a red pill today. Damped 8px shake, red fill, auto-clear after <code>fail_timeout_ms</code>.</div>
       <button class="replay" data-replay="tile-shake">Replay</button>
     </div>
 
@@ -461,21 +461,21 @@
     <div class="tile" data-tile="breathe">
       <div class="tname">Idle breathing <span class="tag S">S</span></div>
       <div class="tscreen"><div class="tpill"><i></i><i></i><i></i></div></div>
-      <div class="tnote">Very subtle 3–4s sine on the pill's glow — proof the screen is live, not frozen. Cheap in <code>render.rs</code>; keep amplitude tiny (CPU is software-rendered).</div>
+      <div class="tnote">Very subtle 3–4s sine on the pill's glow: proof the screen is live, not frozen. Cheap in <code>render.rs</code>; keep amplitude tiny (CPU is software-rendered).</div>
       <button class="replay" data-replay="tile-breathe">Replay</button>
     </div>
 
     <div class="tile" data-tile="gcard">
       <div class="tname">Greeter card entrance <span class="tag S">S</span></div>
       <div class="tscreen"><div class="gcard-mini"><b></b><b></b></div></div>
-      <div class="tnote">Greeter currently has zero animation. Fade + 18px rise, staggered after the clock — GTK4 CSS <code>@keyframes</code> in <code>breadgreet/theme.rs</code>.</div>
+      <div class="tnote">Greeter currently has zero animation. Fade + 18px rise, staggered after the clock: GTK4 CSS <code>@keyframes</code> in <code>breadgreet/theme.rs</code>.</div>
       <button class="replay" data-replay="tile-gcard">Replay</button>
     </div>
 
     <div class="tile" data-tile="focus">
       <div class="tname">Entry focus ring <span class="tag S">S</span></div>
       <div class="tscreen"><div class="gcard-mini"><b></b><b></b></div></div>
-      <div class="tnote">Accent border + soft glow on focus, 200ms transition. Standard GTK CSS <code>:focus</code> — matches the shared stylesheet's "blue on focus" input rule.</div>
+      <div class="tnote">Accent border + soft glow on focus, 200ms transition. Standard GTK CSS <code>:focus</code>; matches the shared stylesheet's "blue on focus" input rule.</div>
       <button class="replay" data-replay="tile-focus">Focus</button>
     </div>
 
@@ -488,7 +488,7 @@
 
     <div class="tile" data-tile="session">
       <div class="tname">Session icon rows <span class="tag M">M</span></div>
-      <div class="tscreen"><div class="rows"><div class="sel"><i></i>bos — Hyprland</div><div><i></i>Hyprland</div></div></div>
+      <div class="tscreen"><div class="rows"><div class="sel"><i></i>bos: Hyprland</div><div><i></i>Hyprland</div></div></div>
       <div class="tnote"><code>sessions.rs</code> doesn't parse <code>Icon=</code> today. Custom dropdown rows with per-session icons; falls back to a letter tile.</div>
       <button class="replay" data-replay="tile-session">Replay</button>
     </div>
@@ -496,25 +496,25 @@
     <div class="tile" data-tile="kenburns">
       <div class="tname">Wallpaper Ken Burns <span class="tag M">M</span></div>
       <div class="tscreen"><div class="tpill"><i></i></div></div>
-      <div class="tnote">Slow pan on image wallpapers — just a drifting <code>Transform</code> in <code>background.rs::paint</code>, no new protocol. Gate behind config (CPU cost).</div>
+      <div class="tnote">Slow pan on image wallpapers: just a drifting <code>Transform</code> in <code>background.rs::paint</code>, no new protocol. Gate behind config (CPU cost).</div>
       <button class="replay" data-replay="tile-kenburns">Replay</button>
     </div>
   </div>
 
   <div class="notes">
     <div class="col">
-      <h4>breadlock — where things land</h4>
+      <h4>breadlock: where things land</h4>
       <ul>
         <li><b>Motion</b>: extend the existing <code>anim_timer</code>/<code>tick_animation</code> loop in <code>state.rs</code>; add per-element progress fields (appear started per element, fail-shake start, dot-pop start).</li>
         <li><b>Frame math</b>: all easing lives in <code>render.rs</code> (<code>ease_out_cubic</code>, <code>overlay_motion</code>). Add <code>ease_out_back</code> for the pill overshoot and a damped sinusoid for the shake.</li>
-        <li><b>Success flash</b>: reuse <code>unlocking: Option&lt;Instant&gt;</code> — flash phase 0–250ms, fade 250–650ms, then <code>unlock()</code>.</li>
-        <li><b>Bigger</b>: live blur-of-desktop needs a <code>wlr-screencopy</code> capture (already flagged v2 in README) — software downscale → blur → upscale to keep CPU sane. New <code>[animation]</code> config section (enabled / speed / per-effect toggles).</li>
+        <li><b>Success flash</b>: reuse <code>unlocking: Option&lt;Instant&gt;</code>: flash phase 0–250ms, fade 250–650ms, then <code>unlock()</code>.</li>
+        <li><b>Bigger</b>: live blur-of-desktop needs a <code>wlr-screencopy</code> capture (already flagged v2 in README); software downscale → blur → upscale to keep CPU sane. New <code>[animation]</code> config section (enabled / speed / per-effect toggles).</li>
       </ul>
     </div>
     <div class="col">
-      <h4>breadgreet — where things land</h4>
+      <h4>breadgreet: where things land</h4>
       <ul>
-        <li><b>Motion</b>: GTK4 CSS supports <code>@keyframes</code>/<code>animation</code> and transitions — everything goes in <code>breadgreet/theme.rs::load_css</code>, no Rust logic needed for entrance/focus/status.</li>
+        <li><b>Motion</b>: GTK4 CSS supports <code>@keyframes</code>/<code>animation</code> and transitions; everything goes in <code>breadgreet/theme.rs::load_css</code>, no Rust logic needed for entrance/focus/status.</li>
         <li><b>Spinner</b>: swap the status label for a <code>gtk::Spinner</code> during <code>Stage::Working</code> in <code>main.rs</code>.</li>
         <li><b>Session icons</b>: parse <code>Icon=</code> in <code>sessions.rs</code> and switch <code>DropDown</code> to custom rows.</li>
         <li><b>Unify with the locker</b>: same clock sizing/weight, same radius + spacing tokens; card <code>backdrop-filter: blur()</code> if GTK ≥ 4.12 supports it (README already requires 4.12).</li>

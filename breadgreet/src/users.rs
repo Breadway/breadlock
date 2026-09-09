@@ -11,7 +11,7 @@
 pub struct User {
     /// The login name (what greetd's `CreateSession` wants).
     pub name: String,
-    /// The GECOS full name if the account has one, else `name` — this is what
+    /// The GECOS full name if the account has one, else `name`: this is what
     /// the picker shows.
     pub display: String,
     pub uid: u32,
@@ -48,7 +48,7 @@ fn uid_bounds(login_defs: Option<&str>) -> (u32, u32) {
     (min, max)
 }
 
-/// A shell that actually lets someone log in — excludes the `nologin` / `false`
+/// A shell that actually lets someone log in: excludes the `nologin` / `false`
 /// placeholders system accounts use.
 fn is_login_shell(shell: &str) -> bool {
     !shell.is_empty() && !shell.ends_with("nologin") && !shell.ends_with("/false")

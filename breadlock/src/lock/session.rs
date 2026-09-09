@@ -14,7 +14,7 @@ impl SessionLockHandler for AppState {
 
     /// The compositor denied the lock request, or ended an active lock out
     /// from under us (e.g. protocol error). Either way there's no lock left
-    /// to protect, so the only sane move is to exit — staying resident
+    /// to protect, so the only sane move is to exit: staying resident
     /// unlocked would be worse than not running at all.
     ///
     /// If `locked` already arrived, dropping the object sends `destroy()`

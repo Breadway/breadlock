@@ -1,7 +1,7 @@
 //! Dev-only harness: exercises the exact PAM flow `breadlock` uses
 //! (`auth::pam::check`) against a typed password, with no Wayland surface
 //! involved at all. This is the safest way to validate the
-//! `/etc/pam.d/breadlock` service file and the auth logic in isolation — a
+//! `/etc/pam.d/breadlock` service file and the auth logic in isolation: a
 //! bad PAM config here just prints an error, it can never lock a session.
 //!
 //! Not installed by the package; run from a build tree with
@@ -102,7 +102,7 @@ impl Drop for EchoOff {
 }
 
 /// Minimal no-echo password prompt so this harness doesn't need the `rpassword`
-/// crate — good enough for a dev tool, never shipped.
+/// crate: good enough for a dev tool, never shipped.
 fn rpassword_prompt() -> Zeroizing<String> {
     use std::io::BufRead;
     eprint!("Password: ");

@@ -1,11 +1,11 @@
 //! GPU background rendering via EGL/GLES2, with the chrome composited in
-//! software (tiny-skia) on top — the hybrid that makes the Ken Burns pan
+//! software (tiny-skia) on top: the hybrid that makes the Ken Burns pan
 //! smooth without a GPU-hungry full renderer.
 //!
 //! The lock surface's `wl_surface` is wrapped in a `wl_egl_window`; each
 //! frame the wallpaper is drawn as a full-screen textured quad whose shader
 //! applies the pan transform (GPU bilinear filtering makes sub-pixel motion
-//! free — the ~19 ms/frame software bilinear is gone) and the vertical dim
+//! free (the ~19 ms/frame software bilinear is gone) and the vertical dim
 //! veil. The chrome (clock/date/pill/status) is still composed by
 //! `render::compose_chrome` into a transparent pixmap and blitted to a
 //! texture each frame (only the bounding rect of what was drawn).
@@ -27,7 +27,7 @@ use tiny_skia::Pixmap;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Proxy};
 
-// Same pan geometry as `background.rs` — kept in sync by comment.
+// Same pan geometry as `background.rs`; kept in sync by comment.
 const KENBURNS_PERIOD_S: f32 = 90.0;
 const KENBURNS_ZOOM: f32 = 1.06;
 
@@ -129,7 +129,7 @@ struct EglSurfaceFns {
 /// One EGL-backed lock surface. Created lazily on the first `configure` (the
 /// size is unknown before that) and resized on subsequent ones. Dropped on
 /// output unplug (`output_destroyed` retains the `LockSurface` out of the
-/// vec), so the native window and EGL surface must be destroyed here —
+/// vec), so the native window and EGL surface must be destroyed here:
 /// process-exit-only was wrong for hotplug.
 pub struct GpuSurface {
     egl_window: *mut wl_egl_window,
@@ -202,7 +202,7 @@ pub struct GpuRenderer {
     context: egl::Context,
     /// 1x1 pbuffer used to make the context current during setup (before any
     /// real lock surface exists). `None` when we fell back to a surfaceless
-    /// context. Kept alive for the renderer's lifetime — dropping it while
+    /// context. Kept alive for the renderer's lifetime; dropping it while
     /// the context might still be current on it is undefined behavior.
     #[allow(dead_code)]
     setup_surface: Option<egl::Surface>,
@@ -230,7 +230,7 @@ pub struct GpuRenderer {
 impl GpuRenderer {
     /// Initializes EGL/GLES2 against the session's Wayland display and loads
     /// the wallpaper into a texture. Returns `None` (after logging) on any
-    /// failure — the caller keeps the software path.
+    /// failure; the caller keeps the software path.
     pub fn new(conn: &Connection, bg_cfg: &BackgroundConfig, palette: &Palette) -> Option<Self> {
         // SAFETY: khronos-egl's dynamic instance loads libEGL.so.1; the
         // returned handles are only used while the library stays loaded.
@@ -254,7 +254,7 @@ impl GpuRenderer {
         // A 1x1 pbuffer is enough to make the context current for setup
         // before any real lock surface exists. The chosen config is
         // WINDOW_BIT-only (more portable than also requiring PBUFFER_BIT),
-        // so pbuffer creation may fail — fall back to a surfaceless
+        // so pbuffer creation may fail: fall back to a surfaceless
         // context (EGL_KHR_surfaceless_context) in that case.
         let setup_surface = egl
             .create_pbuffer_surface(display, config, &[egl::WIDTH, 1, egl::HEIGHT, 1, egl::NONE])
@@ -287,7 +287,7 @@ impl GpuRenderer {
         // Fullscreen quad: two triangles covering [0, w] x [0, h] (pixel
         // space). A single unit quad scaled by `u_screen` in the shader
         // would need a uniform; instead the vertices are normalized and the
-        // vertex shader multiplies by u_screen... but a_pos is in pixels —
+        // vertex shader multiplies by u_screen... but a_pos is in pixels:
         // so upload actual pixel positions per surface size? No: keep the
         // quad in unit space and let the shader's u_screen scale it. The
         // shader expects a_pos in pixels, so upload a 1x1 unit quad scaled
@@ -560,7 +560,7 @@ impl GpuRenderer {
             // upload the quad scaled... a_pos IS in pixels only if we pass
             // pixel positions; with a unit quad, scale here instead.
             // The vertex shader treats a_pos as pixels and divides by
-            // u_screen — for a unit quad we pass a_pos * screen, so set the
+            // u_screen: for a unit quad we pass a_pos * screen, so set the
             // buffer? Simpler: keep unit quad and multiply u_screen into the
             // uv math in the shader. To avoid shader churn: upload a full
             // pixel-space quad per surface size.
@@ -699,7 +699,7 @@ impl GpuRenderer {
         }
         let chrome_tex = surface.chrome_tex.expect("set above");
         if surface.chrome_tex_size != (w, h) {
-            // Allocate with zeros — `tex_image_2d(..., None)` leaves undefined
+            // Allocate with zeros: `tex_image_2d(..., None)` leaves undefined
             // texels, which ghosted when we later drew a fullscreen chrome quad
             // after only uploading the dirty AABB.
             let zeros = vec![0u8; w as usize * h as usize * 4];
@@ -728,7 +728,7 @@ impl GpuRenderer {
             // glTexSubImage2D reads `rw` pixels contiguously per row with no
             // knowledge of the source's row stride. We're on GLES2 (where
             // GL_UNPACK_ROW_LENGTH doesn't exist), so pack the sub-rect rows
-            // into a tightly-strided buffer first — otherwise every row after
+            // into a tightly-strided buffer first: otherwise every row after
             // the first is shifted by (w - rw) pixels and the chrome texture
             // comes out horizontally scrambled (the clock/pill/status rect is
             // narrower than the surface, so this always triggered).
@@ -788,7 +788,7 @@ impl GpuRenderer {
     }
 }
 
-/// Visible source region of the wallpaper for the current pan phase — the
+/// Visible source region of the wallpaper for the current pan phase: the
 /// same cover-fit + Ken Burns math as `background.rs`.
 fn pan_region(
     wp: (u32, u32),
@@ -1143,7 +1143,7 @@ mod tests {
         assert_eq!(packed.len(), 8);
         assert_eq!(packed[0], 1);
         assert_eq!(packed[4], 2);
-        // Two rows: the second row must NOT be shifted by (w - rw) — the bug.
+        // Two rows: the second row must NOT be shifted by (w - rw): the bug.
         let packed2 = pack_rows(&data, 4, 1, 0, 2, 2);
         assert_eq!(packed2[8], 1, "row 2 col 0 must be x=1, not shifted");
         assert_eq!(packed2[12], 2, "row 2 col 1 must be x=2, not shifted");

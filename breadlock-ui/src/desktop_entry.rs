@@ -1,4 +1,4 @@
-//! Minimal freedesktop `.desktop` entry parsing — just enough to discover
+//! Minimal freedesktop `.desktop` entry parsing: just enough to discover
 //! session launchers (`Name=`, `Exec=`, `Type=`) under
 //! `/usr/share/wayland-sessions` and `/usr/share/xsessions`. Also honours
 //! `Hidden=` / `NoDisplay=` / `TryExec=` so we don't offer sessions that
@@ -11,7 +11,7 @@ pub struct DesktopEntry {
     pub name: String,
     pub exec: String,
     pub entry_type: String,
-    /// `TryExec=` if present — [`scan_dir`] skips the entry when this
+    /// `TryExec=` if present; [`scan_dir`] skips the entry when this
     /// binary is missing from disk/`PATH`.
     pub try_exec: Option<String>,
 }
@@ -75,8 +75,8 @@ fn is_desktop_true(value: &str) -> bool {
 }
 
 /// Scans a directory for `*.desktop` files, returning `(file stem, entry)`
-/// pairs. Unreadable directories and unparsable entries are silently skipped
-/// — a missing session directory is normal (e.g. no X11 sessions installed).
+/// pairs. Unreadable directories and unparsable entries are silently skipped:
+/// a missing session directory is normal (e.g. no X11 sessions installed).
 /// Entries whose `TryExec=` binary is missing are skipped too.
 pub fn scan_dir(dir: &Path) -> Vec<(String, DesktopEntry)> {
     let Ok(read_dir) = std::fs::read_dir(dir) else {

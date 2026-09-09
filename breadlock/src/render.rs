@@ -70,7 +70,7 @@ pub(crate) const DIM_ALPHA_BOTTOM: f32 = 0.16;
 /// Darkens a full-screen pixmap with the vertical dim veil, in place:
 /// premultiplied pixels scale by `1 - lerp(DIM_ALPHA_TOP, DIM_ALPHA_BOTTOM,
 /// y/h) * veil_alpha` (equivalent to blending a black gradient over it). A
-/// single pass over the surface — the software renderer's largest recurring
+/// single pass over the surface: the software renderer's largest recurring
 /// cost was the full-screen gradient fill/blit, so this keeps it cheap.
 fn dim_rows(pixmap: &mut Pixmap, veil_alpha: f32) {
     let w = pixmap.width() as usize;
@@ -95,7 +95,7 @@ fn dim_rows(pixmap: &mut Pixmap, veil_alpha: f32) {
 /// Pill hairline-border alpha (sketch: `1px solid rgba(255,255,255,.08)`).
 const PILL_BORDER_ALPHA: f32 = 0.10;
 /// Fake drop-shadow layers under the pill (tiny-skia has no blur filter):
-/// `(grow_px, black_alpha)` — a few concentric copies at fading alpha read
+/// `(grow_px, black_alpha)`: a few concentric copies at fading alpha read
 /// as a soft shadow when drawn under the fill.
 const PILL_SHADOW: [(f32, f32); 3] = [(2.5, 0.20), (5.0, 0.11), (7.5, 0.05)];
 /// Clock/date scale with the surface, clamped to the sketch's CSS ranges
@@ -136,17 +136,17 @@ pub struct FrameInputs<'a> {
     /// Minute-rollover crossfade: `(previous clock text, raw 0..1 progress)`.
     pub clock_old: Option<(&'a str, f32)>,
     pub password_len: usize,
-    /// The actual password text — only read when `reveal` is true (hold-to-
+    /// The actual password text: only read when `reveal` is true (hold-to-
     /// reveal renders the plain characters instead of dots).
     pub password: &'a str,
-    /// True while the reveal key (Tab) is held — dots render as the plain
+    /// True while the reveal key (Tab) is held; dots render as the plain
     /// characters.
     pub reveal: bool,
-    /// Caps Lock state — shows the caps chip when on.
+    /// Caps Lock state: shows the caps chip when on.
     pub caps_lock: bool,
-    /// Active keyboard layout index — shown next to the caps chip when non-0.
+    /// Active keyboard layout index: shown next to the caps chip when non-0.
     pub layout_index: u32,
-    /// Idle auto-dim progress 0..1 (0 = disabled/not idle) — deepens the dim
+    /// Idle auto-dim progress 0..1 (0 = disabled/not idle); deepens the dim
     /// veil after `animation.idle_dim_after_secs` of no keystrokes.
     pub idle_dim: f32,
     /// True while showing a failed attempt (red pill + shake + red status).
@@ -187,7 +187,7 @@ pub fn ease_out_cubic(t: f32) -> f32 {
     1.0 - inv * inv * inv
 }
 
-/// Ease-out-back: overshoots past 1 (~5%) then settles — used for the pill's
+/// Ease-out-back: overshoots past 1 (~5%) then settles; used for the pill's
 /// entrance scale so it pops instead of sliding.
 pub fn ease_out_back(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -196,7 +196,7 @@ pub fn ease_out_back(t: f32) -> f32 {
     1.0 + c3 * (t - 1.0).powi(3) + c1 * (t - 1.0).powi(2)
 }
 
-/// Horizontal shake offset in px for raw progress `t` in 0..1 — a damped
+/// Horizontal shake offset in px for raw progress `t` in 0..1: a damped
 /// sinusoid that starts and ends at rest.
 pub fn damped_shake_x(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -241,7 +241,7 @@ fn unlock_fade_t(unlock_t: f32) -> f32 {
     }
 }
 
-/// Overlay alpha and y-offset (positive is down) from raw 0..1 progress —
+/// Overlay alpha and y-offset (positive is down) from raw 0..1 progress:
 /// used for the full-screen dim veil, which fades with the whole chrome.
 /// Unlock fade starts *after* the success flash (see [`unlock_fade_t`]).
 pub fn overlay_motion(appear_t: f32, unlock_t: f32) -> (f32, f32) {
@@ -261,7 +261,7 @@ pub(crate) const IDLE_DIM_RAMP_MS: u64 = 8000;
 
 /// Background dim alpha with the idle auto-dim folded in. The base veil is
 /// at most 1.0 once the appear finishes, so the idle deepens *beyond* that
-/// (up to `IDLE_DIM_MAX` extra) — it can legally exceed 1.0 because it only
+/// (up to `IDLE_DIM_MAX` extra); it can legally exceed 1.0 because it only
 /// scales the background dim, never a color alpha. Shared by the software
 /// `dim_rows` and the GPU background shader (`u_veil_alpha`) so an
 /// idle-dimmed screen looks identical on both renderers. Rides the same
@@ -290,7 +290,7 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 }
 
 /// Bounding rect of the lock-screen chrome (clock, date, pill, status) in
-/// surface pixels — the GPU path uses it to know which region of the chrome
+/// surface pixels: the GPU path uses it to know which region of the chrome
 /// texture was drawn (and therefore needs uploading each frame).
 ///
 /// Empty is `(+∞, +∞, −∞, −∞)` so [`ChromeRect::expand`] can seed from the
@@ -391,13 +391,13 @@ fn compose_impl(
     let on_surface = tiny_skia_color(breadlock_ui::theme::ink_on(&inputs.palette.color0));
     let red_color = tiny_skia_color(&inputs.palette.color1);
 
-    // Translucent veil over the (static) wallpaper — a vertical gradient
+    // Translucent veil over the (static) wallpaper: a vertical gradient
     // (deeper at the top) that fades with the whole chrome. Applied in place
     // as a per-pixel multiply (premultiplied pixels scale by `1 - a` for a
     // black overlay), which is far cheaper than a full-surface gradient
     // fill/blit every frame. Skipped in the chrome-only path (the GPU shader
     // applies the same veil to the background). `bg_veil` may exceed 1.0
-    // (idle auto-dim), which is fine — it only scales a multiply.
+    // (idle auto-dim), which is fine; it only scales a multiply.
     if rects.is_none() && base_veil > 0.0 {
         dim_rows(pixmap, bg_veil);
     }
@@ -500,8 +500,8 @@ fn compose_impl(
     }
 
     // ---- Date line under the clock (hidden when date_text is empty) and
-    // now-playing / battery under that. Info is *not* nested under the date
-    // — an empty `date_format` used to hide the status line too.
+    // now-playing / battery under that. Info is *not* nested under the date;
+    // an empty `date_format` used to hide the status line too.
     let date_size = (w * 0.016).clamp(DATE_SIZE_MIN, DATE_SIZE_MAX);
     let (clock_top, clock_height) = text.measure_box_weighted(
         inputs.clock_text,
@@ -671,7 +671,7 @@ fn compose_impl(
         paint.anti_alias = true;
         pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, pill_xf, None);
 
-        // Hairline border for depth — dropped on the wrong/success states
+        // Hairline border for depth; dropped on the wrong/success states
         // (the sketch sets `border-color: transparent` there).
         if !inputs.failed && inputs.unlock_t == 0.0 {
             let stroke = tiny_skia::Stroke {
@@ -775,7 +775,7 @@ fn compose_impl(
         );
     }
 
-    // ---- Password dots — one filled circle per typed character, capped so a
+    // ---- Password dots: one filled circle per typed character, capped so a
     // very long password can't overflow the pill. The newest dot pops in with
     // an overshoot; the rest sit at rest size. While the reveal key (Tab) is
     // held, the plain characters are drawn instead.
@@ -790,7 +790,7 @@ fn compose_impl(
     if inputs.reveal && shown_dots > 0 && contents_live {
         // Hold-to-reveal: render the actual password, centered, capped to
         // the pill width (truncate with a trailing ellipsis on overflow).
-        // Measured into locals first — `text` is borrowed mutably by
+        // Measured into locals first: `text` is borrowed mutably by
         // `draw_line`, so all `measure_*` calls must happen up front.
         let reveal_size = tokens::FONT_SIZE_BASE as f32;
         let reveal_rendered = ellipsize(
@@ -939,7 +939,7 @@ fn compose_impl(
 }
 
 /// Recomputes the left edge of the dot row (shared by the dot loop and the
-/// caret placement — kept out of `compose` to avoid a long-lived binding).
+/// caret placement; kept out of `compose` to avoid a long-lived binding).
 fn start_x_for(shown_dots: usize, pill_x: f32, pill_w: f32) -> f32 {
     let dots_w = (shown_dots as f32 - 1.0).max(0.0) * DOT_GAP;
     pill_x + (pill_w - dots_w) / 2.0
@@ -1163,7 +1163,7 @@ mod tests {
             0.0,
         );
         let rest_px = compose(&mut text, &rest).expect("rest compose");
-        // Flash frame should not be a near-empty fade — plenty of chrome left.
+        // Flash frame should not be a near-empty fade: plenty of chrome left.
         let flash_lit = success_px.pixels().iter().filter(|p| p.alpha() > 0).count();
         let rest_lit = rest_px.pixels().iter().filter(|p| p.alpha() > 0).count();
         assert!(
@@ -1195,7 +1195,7 @@ mod tests {
         let base = veil_alpha(0.5, 0.0, 0.0);
         assert!(base > 0.0 && base < 1.0);
         // Full idle dim deepens *past* the base (background-only alpha, so
-        // exceeding 1.0 is legal — it scales the dim multiply, not a color).
+        // exceeding 1.0 is legal; it scales the dim multiply, not a color).
         let idle = veil_alpha(0.5, 0.0, 1.0);
         assert!(idle > base, "idle dim should deepen the veil");
         // At rest with full idle: 1.0 + 0.25 * 1.0.
@@ -1572,7 +1572,7 @@ mod tests {
         // The GPU path draws the dimmed background in a shader and then
         // composites the software chrome (colors pre-faded by the veil alpha)
         // over it with premultiplied source-over. That split must produce the
-        // exact same pixels as the single-pass software compose — this is the
+        // exact same pixels as the single-pass software compose: this is the
         // invariant that keeps the two renderers in sync.
         let bg = Background::Color(Color::from_rgba8(40, 60, 80, 255));
         let palette = breadlock_ui::theme::Palette::default();
@@ -1621,7 +1621,7 @@ mod tests {
 
         // The split path rounds twice (chrome into an 8-bit pixmap, then the
         // composite into 8-bit) where the single pass rounds once, so
-        // bit-exact equality is impossible — the invariant is that the split
+        // bit-exact equality is impossible: the invariant is that the split
         // stays within a couple of ULPs (measured: max 3 on this input, with
         // >95% of pixels bit-identical), and never diverges structurally.
         let diff = split

@@ -9,12 +9,12 @@ jobs:
     runs-on: [self-hosted]
     # Forgejo's Arch package registry does not GPG-sign a pacman db.
     # BOS ISO [breadway] stays SigLevel = Never until a signed db exists.
-    # Do not flip that here — flipping without a signed db breaks pacman.
+    # Do not flip that here: flipping without a signed db breaks pacman.
     # Keep publishing the unsigned .pkg.tar.zst to the registry below.
     container:
       image: archlinux:latest
     steps:
-      # Note: no actions/checkout — the archlinux image has no Node, which JS
+      # Note: no actions/checkout; the archlinux image has no Node, which JS
       # actions require. Everything runs as shell steps and clones manually.
       - name: Build and publish
         env:
@@ -47,7 +47,7 @@ jobs:
 
       # Optional detach-sign. secrets.GPG_PRIVATE_KEY is the same BOS
       # release-signing key (releases@breadway.dev). If the secret is
-      # missing, skip — the registry PUT above already published the
+      # missing, skip: the registry PUT above already published the
       # unsigned package. A lone .sig is not a signed repo: ISO
       # [breadway] stays SigLevel = Never until a signed db exists.
       # The .sig is uploaded as a generic-package artifact next to that

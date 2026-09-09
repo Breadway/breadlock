@@ -53,11 +53,11 @@ fn print_usage() {
     eprintln!(
         "Usage: breadlock [listen]\n\
          \n\
-         (no args)   lock this session — hypridle lock_cmd / Super+L via loginctl lock-session\n\
+         (no args)   lock this session: hypridle lock_cmd / Super+L via loginctl lock-session\n\
          listen      subscribe to bread.command.lock.lock / unlock so both work while unlocked\n\
          \n\
          Session-level lock: loginctl lock-session (hypridle then runs breadlock).\n\
-         Bus unlock does not replace PAM — type the password at the lock screen.\n\
+         Bus unlock does not replace PAM: type the password at the lock screen.\n\
          See EVENTS.md for the bus contract."
     );
 }
@@ -127,7 +127,7 @@ fn run_lock() {
         }
         Err(err) => {
             // Refusing to lock because flock failed would be worse than
-            // running without the singleton — hypridle still needs a locker.
+            // running without the singleton; hypridle still needs a locker.
             tracing::warn!(%err, "could not acquire lock singleton; continuing");
             None
         }
@@ -135,14 +135,14 @@ fn run_lock() {
     let _running = bread_events::enter_lock_process();
 
     // Honor bread.command.lock.lock / unlock while this locker is up
-    // (already-locked is bread.lock.lock.done; unlock is .failed —
+    // (already-locked is bread.lock.lock.done; unlock is .failed:
     // never compositor unlock() or loginctl). Unlocked-path commands
     // need `breadlock listen`.
     let _commands = bread_events::subscribe_commands();
 
     let username = auth::username_from_process().unwrap_or_else(|| {
         tracing::error!(
-            "could not resolve a username (passwd lookup and $USER/$LOGNAME all failed) — \
+            "could not resolve a username (passwd lookup and $USER/$LOGNAME all failed): \
              taking the session lock anyway and refusing PAM"
         );
         String::new()
@@ -153,7 +153,7 @@ fn run_lock() {
     let palette = breadlock_ui::theme::load_palette();
     let background = Background::load(&config.appearance.background, &palette);
 
-    let conn = Connection::connect_to_env().expect("failed to connect to the Wayland display — breadlock must run inside an active Wayland session");
+    let conn = Connection::connect_to_env().expect("failed to connect to the Wayland display: breadlock must run inside an active Wayland session");
     // GPU background rendering (EGL/GLES2). Any failure is non-fatal: the
     // software renderer takes over. `run_lock` is only ever entered in Lock
     // mode (the listen subscriber never renders), so no mode check here.
@@ -161,7 +161,7 @@ fn run_lock() {
     if gpu.is_some() {
         tracing::info!("GPU background rendering enabled (EGL/GLES2)");
     } else {
-        tracing::warn!("GPU background rendering unavailable — using the software renderer");
+        tracing::warn!("GPU background rendering unavailable; using the software renderer");
     }
     let (globals, event_queue) =
         registry_queue_init::<AppState>(&conn).expect("failed to initialize Wayland registry");
@@ -180,7 +180,7 @@ fn run_lock() {
             match result {
                 Ok(()) => {
                     // Keep the lock surfaces up and fade the overlay out.
-                    // Compositor unlock() runs only after UNLOCK_MS — dying
+                    // Compositor unlock() runs only after UNLOCK_MS; dying
                     // mid-fade is fail-secure (session stays locked).
                     tracing::info!("authenticated, fading out");
                     state.failed_attempts = 0;
@@ -193,14 +193,14 @@ fn run_lock() {
                 Err(err) => {
                     match err {
                         // A broken PAM setup (missing/invalid /etc/pam.d/breadlock,
-                        // context init failure) is a config problem, not a typo —
+                        // context init failure) is a config problem, not a typo:
                         // rendering it identically to "wrong password" would lock
                         // the user out with zero indication of what's actually
                         // wrong. Log loudly and show a distinct on-screen message.
                         auth::AuthError::ContextInit => {
                             tracing::error!(
                                 %err,
-                                "PAM context initialization failed — check /etc/pam.d/breadlock exists and is valid; authentication cannot succeed until this is fixed"
+                                "PAM context initialization failed: check /etc/pam.d/breadlock exists and is valid; authentication cannot succeed until this is fixed"
                             );
                             state.enter_fail(AuthState::ConfigError);
                         }
@@ -243,7 +243,7 @@ fn run_lock() {
     });
     if theme_watch.is_none() {
         tracing::warn!(
-            "per-output palette watch unavailable — falling back to reading palettes from disk each frame"
+            "per-output palette watch unavailable; falling back to reading palettes from disk each frame"
         );
     }
 
@@ -274,7 +274,7 @@ fn run_lock() {
         gpu,
         text_renderer: breadlock_ui::painter::TextRenderer::new(),
         username,
-        // Pre-reserve capacity so ordinary typing doesn't reallocate — a
+        // Pre-reserve capacity so ordinary typing doesn't reallocate: a
         // reallocation leaves the old (unzeroized) backing buffer, with the
         // password bytes still in it, on the heap.
         password: zeroize::Zeroizing::new(String::with_capacity(state::PASSWORD_CAP)),
@@ -308,14 +308,14 @@ fn run_lock() {
         exit: false,
     };
 
-    // Request the lock immediately — locking the session is the entire
+    // Request the lock immediately: locking the session is the entire
     // purpose of this process, not a toggle. Per ext-session-lock-v1, a lock
     // surface must exist for every output *before* the compositor sends
     // `locked` (see SessionLockHandler::locked's doc comment upstream).
     let session_lock = app_state
         .session_lock_state
         .lock(&qh)
-        .expect("compositor does not support ext-session-lock-v1 — cannot lock the session");
+        .expect("compositor does not support ext-session-lock-v1: cannot lock the session");
     for output in app_state.output_state.outputs() {
         let surface = app_state.compositor_state.create_surface(&qh);
         let lock_surface = session_lock.create_lock_surface(surface, &output, &qh);
@@ -355,11 +355,11 @@ fn run_lock() {
     // A dispatch error here is the one path that can end this process while
     // the session lock is still up: `SessionLockInner::drop` deliberately
     // does *not* send `unlock`, only `destroy` (see the crate's own doc
-    // comment — "choosing not to unlock here results in us failing secure"),
+    // comment, "choosing not to unlock here results in us failing secure"),
     // so an abrupt exit stays fail-secure at the protocol level; the failure
     // mode is a frozen/unusable lock screen (Hyprland's "lock client
     // crashed" state), not an unlocked one. We do NOT call `.unlock()` from
-    // here — doing so on an error path would make an unattended failure
+    // here: doing so on an error path would make an unattended failure
     // capable of unlocking the session, i.e. turn a fail-secure bug into a
     // fail-open one. Instead: tolerate a burst of transient errors (a single
     // `dispatch()` hiccup shouldn't be fatal) and only give up, loudly, after
@@ -380,14 +380,14 @@ fn run_lock() {
                 tracing::error!(
                     %err,
                     consecutive_errors,
-                    "event loop dispatch failed — session remains locked (fail-secure); \
+                    "event loop dispatch failed: session remains locked (fail-secure); \
                      if this persists the lock screen may become unresponsive and require \
                      a VT switch or `loginctl` to recover"
                 );
                 if consecutive_errors >= MAX_CONSECUTIVE_DISPATCH_ERRORS {
                     tracing::error!(
                         "giving up after {consecutive_errors} consecutive dispatch failures; \
-                         exiting WITHOUT unlocking — this is intentional (fail-secure), but \
+                         exiting WITHOUT unlocking: this is intentional (fail-secure), but \
                          the screen will likely be stuck and need a VT switch to recover"
                     );
                     break;

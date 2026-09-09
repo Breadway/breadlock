@@ -17,12 +17,12 @@ pub enum SessionKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
-    /// `.desktop` file stem (`bos` for `bos.desktop`) — used to match
+    /// `.desktop` file stem (`bos` for `bos.desktop`): used to match
     /// `[sessions].default`.
     pub stem: String,
     pub name: String,
     pub exec: Vec<String>,
-    /// Which directory list this entry came from — drives `XDG_SESSION_TYPE`.
+    /// Which directory list this entry came from; drives `XDG_SESSION_TYPE`.
     pub kind: SessionKind,
 }
 
@@ -77,7 +77,7 @@ pub fn default_index(sessions: &[Session], default: &str) -> usize {
 /// Scans `wayland_dirs` then `xsessions_dirs` (in that order) and returns
 /// the entry matching `default` (by `.desktop` file stem), falling back to
 /// the first entry found in either directory. `None` if nothing is
-/// installed — the greeter has no session to offer.
+/// installed: the greeter has no session to offer.
 pub fn discover(
     wayland_dirs: &[String],
     xsessions_dirs: &[String],

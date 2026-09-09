@@ -1,4 +1,4 @@
-//! `bread.lock.*` event integration — optional, non-blocking. See
+//! `bread.lock.*` event integration: optional, non-blocking. See
 //! `EVENTS.md` at the repo root for the full contract. breadlock works
 //! identically with or without breadd running; every `emit` here is
 //! fire-and-forget (`BreadClient::emit` never blocks or errors this
@@ -11,7 +11,7 @@
 //! is the unlocked-path subscriber: it starts this same binary the way
 //! hypridle's `lock_cmd = breadlock` does, and treats unlock as already
 //! unlocked (`bread.lock.unlock.done`). If the locker is running, unlock
-//! is `bread.lock.unlock.failed` — only PAM at the lock screen may
+//! is `bread.lock.unlock.failed`: only PAM at the lock screen may
 //! unlock. Super+L / hypridle remain `loginctl lock-session`. Bus unlock
 //! never calls compositor `unlock()` or `loginctl unlock-session`.
 
@@ -23,7 +23,7 @@ use bread_utils::bread_client::{BreadClient, BreadEvent, Subscription};
 use bread_utils::singleton::{try_acquire, Acquire};
 
 /// This app's id in bread's sibling-app namespace registry
-/// (`bread_shared::apps::KNOWN_APPS`) — events publish as `bread.lock.*`,
+/// (`bread_shared::apps::KNOWN_APPS`); events publish as `bread.lock.*`,
 /// commands arrive on `bread.command.lock.*`.
 pub const APP_ID: &str = "lock";
 
@@ -82,7 +82,7 @@ pub fn emit_unlock_failed(error: &str) {
 }
 
 /// True when this process is the locker, or another process holds the
-/// locker singleton — i.e. breadlock is already locking this session.
+/// locker singleton, i.e. breadlock is already locking this session.
 pub fn locker_is_running() -> bool {
     LOCKER_RUNNING.load(Ordering::SeqCst) || singleton_held(APP_ID)
 }
@@ -120,7 +120,7 @@ pub fn start_locker() -> Result<(), String> {
 
 /// Honor `bread.command.lock.lock`: already locked is success; otherwise
 /// start the locker. `done` means the command was acted on, not that
-/// `ext-session-lock-v1` has been accepted — wait on `bread.lock.locked`
+/// `ext-session-lock-v1` has been accepted; wait on `bread.lock.locked`
 /// for the compositor confirmation.
 pub fn honor_lock_command() {
     honor_lock_command_with(locker_is_running(), start_locker);

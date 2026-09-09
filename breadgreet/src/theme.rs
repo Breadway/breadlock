@@ -3,7 +3,7 @@
 //! Layered on `bread_theme`'s shared `@define-color` palette (`@surface`,
 //! `@overlay`, `@accent`, `@teal`, `@red`, …) via `apply_shared()` +
 //! `apply_app_css()`. Visual target: `design/sketch.html`'s `.greetoverlay`
-//! and the lock screen's motion vocabulary — a hero clock over an accent
+//! and the lock screen's motion vocabulary: a hero clock over an accent
 //! rule, a floating surface card with a staggered pop-in, an entry with a
 //! live accent focus glow, and per-state motion (spinner, shake).
 //!
@@ -52,7 +52,7 @@ fn load_css(font_family: &str) -> String {
              text-shadow: 0 1px 10px alpha(black, 0.55);\
              animation: bg-rise 520ms cubic-bezier(0.16, 1, 0.3, 1) 80ms both;\
          }}\
-         /* accent rule between the clock and the card — draws in */\
+         /* accent rule between the clock and the card, draws in */\
          .login-rule {{\
              min-height: 3px; min-width: 88px; margin: 15px 0 22px;\
              border-radius: 3px;\
@@ -216,8 +216,8 @@ pub fn apply(font_family: &str) {
 /// breadgreet's own sheet as a widget-tree provider.
 ///
 /// [`apply`]'s `apply_app_css` loads at APPLICATION priority, but
-/// `bind_window_auto` re-broadcasts the shared component sheet — including its
-/// `* { font-size }` base rule — at `USER - 10`, which outranks APPLICATION
+/// `bind_window_auto` re-broadcasts the shared component sheet, including its
+/// `* { font-size }` base rule, at `USER - 10`, which outranks APPLICATION
 /// regardless of selector specificity. So the hero clock, the date, every
 /// typographic override here would silently collapse back to the base size.
 /// Riding our sheet at `USER - 9` (what `_with_app_css` does) puts it back on
