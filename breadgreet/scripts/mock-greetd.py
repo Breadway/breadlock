@@ -3,7 +3,7 @@
 
 Speaks the greetd IPC wire format (`u32` native-endian length prefix + JSON
 body, see the `greetd_ipc` crate) on a Unix socket. It never touches PAM and
-never starts anything — `start_session` just acknowledges and the greeter
+never starts anything: `start_session` just acknowledges and the greeter
 exits, exactly as it would on a real login.
 
     ./mock-greetd.py /run/user/1000/breadgreet-preview.sock [password]

@@ -141,7 +141,7 @@ impl KeyboardHandler for AppState {
         let changed = self.caps_lock != modifiers.caps_lock || self.layout_index != layout;
         self.caps_lock = modifiers.caps_lock;
         self.layout_index = layout;
-        // A modifier update is still "activity" — it follows a key press, so
+        // A modifier update is still "activity": it follows a key press, so
         // don't let the idle auto-dim start counting while typing.
         self.last_activity = Instant::now();
         if changed {
@@ -158,7 +158,7 @@ impl AppState {
         // Plain `get_keyboard` never populates SCTK's internal repeat
         // timer, so `KeyboardHandler::repeat_key` below only ever fires
         // for compositors that implement server-side key repeat
-        // (wl_keyboard >= v10's "repeated" pseudo key-state) themselves —
+        // (wl_keyboard >= v10's "repeated" pseudo key-state) themselves;
         // Hyprland does not reliably do this. `get_keyboard_with_repeat`
         // registers SCTK's own client-side repeat timer driven by the
         // compositor's `repeat_info` (delay/rate); if a compositor *does*
@@ -223,7 +223,7 @@ impl AppState {
             return;
         }
 
-        // Any key counts as activity — it resets the idle auto-dim ramp even
+        // Any key counts as activity: it resets the idle auto-dim ramp even
         // when it doesn't change the password (e.g. pressing Enter on an
         // empty field).
         self.last_activity = Instant::now();
@@ -266,7 +266,7 @@ impl AppState {
                 if let Some(text) = event.utf8 {
                     // Return/BackSpace/Escape are handled above by keysym;
                     // this guards against a compositor also sending utf8 for
-                    // those (defensive — filters any stray control chars).
+                    // those (defensive; filters any stray control chars).
                     let mut grew = false;
                     for ch in text.chars().filter(|c| !c.is_control()) {
                         if try_push_password(&mut self.password, ch) {
@@ -344,7 +344,7 @@ pub(crate) fn try_push_password(password: &mut String, ch: char) -> bool {
     true
 }
 
-/// Character count for the password pill — never `String::len()` (UTF-8).
+/// Character count for the password pill: never `String::len()` (UTF-8).
 pub(crate) fn password_char_count(password: &str) -> usize {
     password.chars().count()
 }

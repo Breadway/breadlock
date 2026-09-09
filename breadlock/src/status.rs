@@ -1,4 +1,4 @@
-//! D-Bus status integration — now-playing (MPRIS) and battery (upower).
+//! D-Bus status integration: now-playing (MPRIS) and battery (upower).
 //!
 //! Both are polled on a single background thread (zbus's blocking API has no
 //! place on the render loop) and the result is posted back through a
@@ -6,7 +6,7 @@
 //! system bus connections are opened once in that thread and reused; a failed
 //! call drops the connection so the next tick reconnects. Missing or broken
 //! D-Bus (headless CI, a session without upower, etc.) just yields empty
-//! status — this module never blocks or fails the locker.
+//! status; this module never blocks or fails the locker.
 
 use smithay_client_toolkit::reexports::calloop::channel::{self, Sender};
 use smithay_client_toolkit::reexports::calloop::LoopHandle;
@@ -17,7 +17,7 @@ use zbus::zvariant::{Dict, OwnedValue, Value};
 /// clock when either field is present.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StatusInfo {
-    /// `"{title} — {artist}"` for the currently-playing MPRIS player (the
+    /// `"{title}, {artist}"` for the currently-playing MPRIS player (the
     /// first one advertising `PlaybackStatus == "Playing"`, else the first
     /// paused one). Playing players with no title fall back to artist, the
     /// player name, or `"Playing"`. Empty when nothing is playing or MPRIS
@@ -69,7 +69,7 @@ pub fn spawn_poller(tx: Sender<StatusInfo>, now_playing: bool, battery: bool) {
         loop {
             let info = poll_once(&mut session, &mut system, now_playing, battery);
             if tx.send(info).is_err() {
-                // Event loop gone (unlocked) — nothing left to report.
+                // Event loop gone (unlocked): nothing left to report.
                 return;
             }
             std::thread::sleep(std::time::Duration::from_secs(POLL_SECS));
@@ -203,7 +203,7 @@ fn format_now_playing(title: Option<&str>, artist: Option<&str>, player: &str) -
     let title = title.map(sanitize_mpris_field).filter(|s| !s.is_empty());
     let artist = artist.map(sanitize_mpris_field).filter(|s| !s.is_empty());
     let line = match (title, artist) {
-        (Some(t), Some(a)) => format!("{t} — {a}"),
+        (Some(t), Some(a)) => format!("{t}, {a}"),
         (Some(t), None) => t,
         (None, Some(a)) => a,
         (None, None) => mpris_player_fallback(player),
@@ -337,7 +337,7 @@ mod tests {
                 Some("Radiohead"),
                 "org.mpris.MediaPlayer2.spotify"
             ),
-            "Paranoid Android — Radiohead"
+            "Paranoid Android, Radiohead"
         );
         assert_eq!(
             format_now_playing(Some("Untitled"), None, "org.mpris.MediaPlayer2.mpv"),
@@ -370,7 +370,7 @@ mod tests {
     fn format_now_playing_strips_newlines_and_truncates() {
         assert_eq!(
             format_now_playing(Some("foo\nbar"), Some("a\r\nb"), "org.mpris.MediaPlayer2.x"),
-            "foo bar — a b"
+            "foo bar, a b"
         );
         let title = "T".repeat(100);
         let titled = format_now_playing(Some(&title), None, "org.mpris.MediaPlayer2.x");

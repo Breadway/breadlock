@@ -25,7 +25,7 @@ pub(crate) const PASSWORD_CAP: usize = 256;
 /// Per-output lock surface plus the size the compositor last `configure`d it
 /// to (0x0 until the first configure arrives). `output` is kept so
 /// `output_destroyed` can find and drop the surface belonging to an unplugged
-/// monitor — without it, hotplug/unplug cycles only ever grow `surfaces`.
+/// monitor; without it, hotplug/unplug cycles only ever grow `surfaces`.
 pub struct LockSurface {
     pub surface: SessionLockSurface,
     pub output: wl_output::WlOutput,
@@ -51,14 +51,14 @@ pub enum AuthState {
     /// attempt. Escape cancels the wait (the in-flight libpam call is not
     /// aborted; its result is ignored).
     Checking,
-    /// The password was rejected by PAM — an ordinary wrong-password
+    /// The password was rejected by PAM: an ordinary wrong-password
     /// outcome the user can retry. Input is not blocked.
     Failed,
     /// PAM `acct_mgmt` rejected the account (locked, expired, etc.).
     AccountInvalid,
     /// PAM itself failed to initialize (e.g. `/etc/pam.d/breadlock` is
     /// missing or unreadable), or the process username could not be
-    /// resolved — a config/deployment problem, not something the user's
+    /// resolved: a config/deployment problem, not something the user's
     /// password can fix. Rendered with a distinct message so a broken
     /// install doesn't look like an endless string of typos.
     ConfigError,
@@ -92,7 +92,7 @@ pub struct AppState {
     pub output_palettes:
         std::cell::RefCell<std::collections::HashMap<String, breadlock_ui::theme::Palette>>,
     /// File watcher that invalidates [`AppState::output_palettes`] on a
-    /// palette change. `None` when the watch could not be armed — then
+    /// palette change. `None` when the watch could not be armed; then
     /// `palette_for_surface` falls back to reading from disk each call so a
     /// live palette change is still reflected (just less cheaply).
     pub theme_watch: Option<crate::theme_watch::ThemeWatch>,
@@ -107,7 +107,7 @@ pub struct AppState {
     /// (e.g. when `submit()` swaps in a fresh one) rather than just
     /// deallocated with the password bytes left sitting in freed heap
     /// memory. Individual edits (backspace, clear) still need their own
-    /// explicit zeroing — see `input/keyboard.rs` — since `Zeroizing` only
+    /// explicit zeroing (see `input/keyboard.rs`), since `Zeroizing` only
     /// hooks `Drop`, not in-place mutation.
     pub password: zeroize::Zeroizing<String>,
     /// Character count shown in the pill after submit (secret already
@@ -121,10 +121,10 @@ pub struct AppState {
     /// Bumped each time Failed / AccountInvalid / ConfigError is set.
     /// The fail-clear timer captures this and only clears if it still matches.
     pub failed_generation: u64,
-    /// When the current PAM check entered Checking — drives `checking_dots`.
+    /// When the current PAM check entered Checking; drives `checking_dots`.
     pub checking_started: Option<Instant>,
 
-    /// Monotonic clock reference — drives the idle caret blink cadence.
+    /// Monotonic clock reference; drives the idle caret blink cadence.
     pub started: Instant,
     /// First-frame timestamp for the lock-appear animation. `None` until
     /// the first non-degenerate redraw so the fade starts when the surface
@@ -134,10 +134,10 @@ pub struct AppState {
     /// overlay fades out; compositor `unlock()` happens only after the
     /// fade completes. Dying mid-fade leaves the session locked (fail-secure).
     pub unlocking: Option<Instant>,
-    /// Timestamp of the most recent keystroke that grew the password — drives
+    /// Timestamp of the most recent keystroke that grew the password; drives
     /// the newest-dot pop-in and the caret's solid-then-blink behavior.
     pub last_keystroke: Option<Instant>,
-    /// When the failed state was entered — drives the wrong-password shake.
+    /// When the failed state was entered; drives the wrong-password shake.
     /// Cleared (with the failed state) by typing or `fail_timeout_ms`.
     pub failed_at: Option<Instant>,
     /// Clock text drawn last frame; a change starts a minute-rollover
@@ -146,36 +146,36 @@ pub struct AppState {
     /// Outgoing clock string + when its crossfade started. Kept until the
     /// fade completes so later frames still pass the previous string.
     pub clock_from: Option<(String, Instant)>,
-    /// When the current status line appeared ("Checking…" / "Wrong password") —
+    /// When the current status line appeared ("Checking…" / "Wrong password");
     /// drives its slide-in. Reset whenever `auth_state` changes (see
     /// `last_auth_state`).
     pub status_anim_started: Option<Instant>,
-    /// The `auth_state` from the last frame — a change resets the status
+    /// The `auth_state` from the last frame; a change resets the status
     /// slide-in so a freshly appearing status rises in instead of popping.
     pub last_auth_state: AuthState,
     /// When the current idle-breath window started (glow pulse). `None`
     /// between breaths.
     pub breathe_started: Option<Instant>,
-    /// When the next idle-breath window is due — the 1s clock tick arms the
+    /// When the next idle-breath window is due; the 1s clock tick arms the
     /// animation timer once it's due, so idle CPU stays near zero.
     pub breathe_next_at: Option<Instant>,
     /// True while a ~16ms animation timer is registered on the event loop.
     pub anim_timer_armed: bool,
 
-    /// Caps Lock is on (from the last keyboard modifier update) — drives the
+    /// Caps Lock is on (from the last keyboard modifier update); drives the
     /// small "Caps Lock" chip so the user isn't mystified by uppercase-only
     /// input. Stale until the first modifier update arrives.
     pub caps_lock: bool,
-    /// Active keyboard layout index (0-based) — shown next to the caps chip
+    /// Active keyboard layout index (0-based); shown next to the caps chip
     /// when a non-default layout is selected.
     pub layout_index: u32,
-    /// True while the user holds the reveal key (Tab) — dots render as the
+    /// True while the user holds the reveal key (Tab); dots render as the
     /// plain characters while held.
     pub reveal_held: bool,
-    /// Last keystroke/activity timestamp — drives the idle auto-dim ramp
+    /// Last keystroke/activity timestamp; drives the idle auto-dim ramp
     /// (`animation.idle_dim_after_secs`). Any key press resets it.
     pub last_activity: Instant,
-    /// Consecutive failed password attempts this session — drives the
+    /// Consecutive failed password attempts this session; drives the
     /// "N failed attempts" status line. Reset on a successful auth.
     pub failed_attempts: u32,
     /// Latest D-Bus snapshot (now-playing / battery) from the status poller.
@@ -244,14 +244,14 @@ impl AppState {
                 // alone reads identically every time).
                 let n = self.failed_attempts.max(1);
                 Some(if n > 1 {
-                    format!("Wrong password — {n} failed attempts")
+                    format!("Wrong password: {n} failed attempts")
                 } else {
                     "Wrong password".to_string()
                 })
             }
             AuthState::AccountInvalid => Some("Account locked or expired".to_string()),
             AuthState::ConfigError => Some(
-                "PAM config error — check logs (breadlock service not set up correctly)"
+                "PAM config error: check logs (breadlock service not set up correctly)"
                     .to_string(),
             ),
             AuthState::Idle => None,
@@ -391,7 +391,7 @@ impl AppState {
                 self.arm_anim_if_needed(qh);
                 return;
             }
-            tracing::warn!("GPU frame failed — dropping EGL window and falling back to software");
+            tracing::warn!("GPU frame failed: dropping EGL window and falling back to software");
         }
 
         // An EGL window on this wl_surface makes a later shm attach illegal;
@@ -507,7 +507,7 @@ impl AppState {
     /// Resolve the palette for the monitor showing `surface`, reading it from
     /// the per-output cache (populated on first use) rather than parsing the
     /// on-disk JSON every frame. Falls back to the global palette when the
-    /// output has no name, and — if the theme watcher isn't armed — to an
+    /// output has no name, and, if the theme watcher isn't armed, to an
     /// uncached per-call disk read so a palette change is still picked up.
     /// Palette for the monitor showing `surface`. Served from the per-output
     /// cache (populated on first use, invalidated by the theme watcher) so a
@@ -543,7 +543,7 @@ impl AppState {
         self.output_palettes.borrow_mut().clear();
     }
 
-    /// Redraws every currently-configured surface — used for the clock tick
+    /// Redraws every currently-configured surface; used for the clock tick
     /// and after any password/auth-state change.
     pub fn redraw_all(&mut self, qh: &QueueHandle<Self>) {
         let surfaces: Vec<(SessionLockSurface, u32, u32)> = self
@@ -607,7 +607,7 @@ impl AppState {
 
     /// An idle breath is due when the cycle timer says so (and no breath is
     /// already running). The 1s clock tick calls `redraw_all`, which arms the
-    /// animation timer through here — so the screen stays asleep between
+    /// animation timer through here, so the screen stays asleep between
     /// breaths.
     fn breathe_due(&self) -> bool {
         if !self.config.animation.breathe || self.breathe_started.is_some() {
@@ -643,7 +643,7 @@ impl AppState {
     /// Any effect still running that needs the animation timer: the fast ones
     /// (entrance, unlock flash+fade, shake, dot pop, clock rollover, status
     /// slide, a live PAM check) plus the slow ones (idle breath, Ken Burns
-    /// pan, idle dim ramp, caret blink) which run at a reduced cadence — see
+    /// pan, idle dim ramp, caret blink) which run at a reduced cadence; see
     /// `tick_animation`.
     fn anim_in_progress(&self) -> bool {
         self.unlocking.is_some()
@@ -706,7 +706,7 @@ impl AppState {
             TimeoutAction::Drop
         } else if self.anim_in_progress() {
             // Slow effects (idle breath, Ken Burns, dim, caret) don't need
-            // 60fps — halve the redraw cost for them. Everything else stays
+            // 60fps: halve the redraw cost for them. Everything else stays
             // at ~60Hz.
             let fast = self.fast_anim_in_progress();
             TimeoutAction::ToDuration(Duration::from_millis(if fast {
@@ -721,7 +721,7 @@ impl AppState {
     }
 
     /// After the unlock fade reaches t==1, send compositor `unlock` and
-    /// exit. Not called until then — dying mid-fade stays locked.
+    /// exit. Not called until then; dying mid-fade stays locked.
     pub fn complete_unlock_if_ready(&mut self) {
         let Some(started) = self.unlocking else {
             return;
@@ -738,7 +738,7 @@ impl AppState {
     }
 
     /// After a failed attempt, clears the red UI once `input.fail_timeout_ms`
-    /// has elapsed — unless a newer fail (or the user typing) has moved the
+    /// has elapsed, unless a newer fail (or the user typing) has moved the
     /// generation. Input is not blocked during Failed.
     pub fn schedule_clear_failed(&self, qh: QueueHandle<Self>) {
         let timeout = Duration::from_millis(self.config.input.fail_timeout_ms);

@@ -1,4 +1,4 @@
-//! Thin async wrapper around `greetd_ipc`'s wire protocol — connects to
+//! Thin async wrapper around `greetd_ipc`'s wire protocol: connects to
 //! `$GREETD_SOCK`, and turns greetd's `Request`/`Response` enums into a
 //! small state machine ([`Outcome`]) the UI drives.
 
@@ -8,7 +8,7 @@ use tokio::net::UnixStream;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GreetdError {
-    #[error("$GREETD_SOCK is not set — breadgreet must be launched by greetd")]
+    #[error("$GREETD_SOCK is not set: breadgreet must be launched by greetd")]
     NoSocketEnv,
     #[error("failed to connect to greetd socket: {0}")]
     Connect(#[source] std::io::Error),
@@ -28,15 +28,15 @@ pub enum AuthPrompt {
     Visible(String),
     /// Answer should be masked (a password).
     Secret(String),
-    /// Informational message — no answer needed, just display and continue.
+    /// Informational message: no answer needed, just display and continue.
     Info(String),
-    /// Non-fatal error message from a PAM module — display and continue.
+    /// Non-fatal error message from a PAM module: display and continue.
     Error(String),
 }
 
 #[derive(Debug, Clone)]
 pub enum Outcome {
-    /// Login flow complete — call [`Client::start_session`] next.
+    /// Login flow complete: call [`Client::start_session`] next.
     Success,
     /// Another prompt to answer via [`Client::respond`].
     Prompt(AuthPrompt),
@@ -55,7 +55,7 @@ impl Client {
         Self::connect_to(path).await
     }
 
-    /// Connects to an explicit socket path, bypassing `$GREETD_SOCK` —
+    /// Connects to an explicit socket path, bypassing `$GREETD_SOCK`:
     /// used directly by tests against a mock server so they don't need to
     /// mutate process-global environment state (which parallel `cargo test`
     /// threads would race on).
@@ -110,7 +110,7 @@ impl Client {
     }
 
     /// Aborts an in-progress login flow (e.g. the user hit Escape). Per the
-    /// protocol this can only be called before `StartSession` — best-effort,
+    /// protocol this can only be called before `StartSession`; best-effort,
     /// errors here don't matter to the caller since the flow is being torn
     /// down either way.
     pub async fn cancel_session(&mut self) {
@@ -145,7 +145,7 @@ impl Client {
 #[cfg(test)]
 mod tests {
     //! Exercises the framing/state-machine logic against a mock Unix-socket
-    //! server speaking the real greetd_ipc wire format — no real greetd or
+    //! server speaking the real greetd_ipc wire format; no real greetd or
     //! PAM involved. This is the safe way to test this module: a bug here
     //! just fails a test, it can never affect a real login.
     use super::*;
@@ -166,7 +166,7 @@ mod tests {
     async fn serve(listener: UnixListener, script: Vec<Response>) {
         let (mut stream, _) = listener.accept().await.unwrap();
         for response in script {
-            // Drain the request that prompted this response — we don't need
+            // Drain the request that prompted this response: we don't need
             // to inspect it, just keep the framing in lockstep.
             let _ = Request::read_from(&mut stream).await;
             response.write_to(&mut stream).await.unwrap();

@@ -4,7 +4,7 @@
 //! `state::AppState` caches the resolved [`breadlock_ui::theme::Palette`] per
 //! output name (`output_palettes`). Without this watcher that cache would
 //! never refresh; with it, a wallpaper/palette change invalidates the cache
-//! and triggers one redraw — instead of the old behaviour of re-reading and
+//! and triggers one redraw: instead of the old behaviour of re-reading and
 //! re-parsing `palettes/<output>.json` from disk on every rendered frame
 //! (60fps during animations, plus the 1s clock tick, times N monitors).
 //!
@@ -75,7 +75,7 @@ pub fn register<Data: 'static>(
 }
 
 /// True when an event touches a generated palette (`*.json`) or theme
-/// (`*.css`) file — not the `.<name>.tmp.<pid>` scratch files that
+/// (`*.css`) file, not the `.<name>.tmp.<pid>` scratch files that
 /// `bread-theme`'s atomic writes create and immediately rename away.
 fn is_palette_change(event: &notify::Event) -> bool {
     if !matches!(

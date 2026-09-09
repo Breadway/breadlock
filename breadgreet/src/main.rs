@@ -11,41 +11,41 @@ use gtk4::prelude::*;
 use relm4::prelude::*;
 use tokio::sync::mpsc;
 
-/// Extra zoom beyond plain cover-fit — matches breadlock's `KENBURNS_ZOOM`.
+/// Extra zoom beyond plain cover-fit: matches breadlock's `KENBURNS_ZOOM`.
 const KENBURNS_ZOOM: f32 = 1.06;
 
 #[derive(Debug, Clone)]
 enum Stage {
-    /// Waiting for a username typed into `entry` — only reached when user
+    /// Waiting for a username typed into `entry`: only reached when user
     /// enumeration is off or found nothing (see [`App::typed_mode`]).
     Username,
     /// greetd/PAM asked a question; `entry` holds the answer (masking is
     /// applied imperatively on the entry widget when the prompt arrives).
     Prompt,
-    /// A request is in flight — input is disabled so a second Enter can't
+    /// A request is in flight; input is disabled so a second Enter can't
     /// race it. Also the initial stage in auto-user mode, while the opening
     /// `CreateSession` is in flight.
     Working,
-    /// `StartSession` has been sent — Escape must not cancel.
+    /// `StartSession` has been sent; Escape must not cancel.
     Starting,
 }
 
 #[derive(Debug)]
 enum AppInput {
     ClockTick,
-    /// Enter pressed in the entry — behavior depends on `Stage`.
+    /// Enter pressed in the entry: behavior depends on `Stage`.
     Submit,
     Outcome(Outcome),
     Error(String),
     SessionStarted,
     /// Picker changed; `u32::MAX` (`INVALID_LIST_POSITION`) is ignored.
     SessionSelected(u32),
-    /// User picker changed (multi-user auto mode) — restart auth for that user.
+    /// User picker changed (multi-user auto mode); restart auth for that user.
     UserSelected(u32),
     /// Post-init kick in auto-user mode: open the greetd conversation for the
     /// resolved user so the greeter lands straight on the password prompt.
     AutoStart,
-    /// Escape — abort the in-progress PAM conversation.
+    /// Escape: abort the in-progress PAM conversation.
     Cancel,
 }
 
@@ -57,7 +57,7 @@ struct App {
     card: gtk4::Box,
     spinner: gtk4::Box,
     stage: Stage,
-    /// The name currently being authenticated — typed in [`Stage::Username`],
+    /// The name currently being authenticated: typed in [`Stage::Username`],
     /// or the resolved account in auto-user mode.
     username: String,
     /// Enumerated login accounts. Empty ⇒ typed-username mode; one ⇒ straight
@@ -68,7 +68,7 @@ struct App {
     selected: usize,
     clock_format: String,
     date_format: String,
-    /// Last status line was a PAM Info/Error — keep it when the next
+    /// Last status line was a PAM Info/Error: keep it when the next
     /// Secret/Visible prompt arrives.
     pam_status_held: bool,
     cmd_tx: mpsc::UnboundedSender<greetd::Command>,
@@ -144,7 +144,7 @@ impl SimpleComponent for App {
         if config.appearance.background.blur {
             tracing::warn!(
                 "background.blur is not implemented yet (planned v2 feature, needs a wlr-screencopy \
-                 capture) — showing the configured background unblurred"
+                 capture); showing the configured background unblurred"
             );
         }
 
@@ -190,12 +190,12 @@ impl SimpleComponent for App {
 
         if sessions.is_empty() {
             entry.set_sensitive(false);
-            status_lbl.set_label("No session found — cannot log in");
+            status_lbl.set_label("No session found: cannot log in");
             status_lbl.add_css_class("error");
         }
 
         let session_widget: gtk4::Widget = if sessions.is_empty() {
-            let session_lbl = gtk4::Label::new(Some("No session found — cannot log in"));
+            let session_lbl = gtk4::Label::new(Some("No session found: cannot log in"));
             session_lbl.add_css_class("login-session");
             session_lbl.upcast()
         } else {
@@ -227,7 +227,7 @@ impl SimpleComponent for App {
 
         // The "who's logging in" row, shown above the password field in auto
         // mode: a gradient avatar glyph + either the account name (one user) or
-        // a picker (several). Nothing in typed mode — the entry is the field.
+        // a picker (several). Nothing in typed mode: the entry is the field.
         let user_widget: Option<gtk4::Widget> = if !auto_user {
             None
         } else {
@@ -304,7 +304,7 @@ impl SimpleComponent for App {
         widgets.overlay.add_overlay(&veil);
         widgets.overlay.add_overlay(&widgets.root_box);
 
-        // Thin accent rule between the clock cluster and the card — a
+        // Thin accent rule between the clock cluster and the card, a
         // signature detail shared with the lock screen; it draws itself in
         // (scaleX 0→1) via `.login-rule`.
         let rule = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
@@ -344,7 +344,7 @@ impl SimpleComponent for App {
         };
         setup_wallpaper(&root, &bg_area, wallpaper_path.as_deref(), ken_burns);
         // Entrance motion (clock rise, rule draw, card pop-in + idle breathe)
-        // is CSS `@keyframes` in theme.rs — GTK4 plays `animation` when a
+        // is CSS `@keyframes` in theme.rs; GTK4 plays `animation` when a
         // widget's style is first computed on show.
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -362,7 +362,7 @@ impl SimpleComponent for App {
             entry,
             card,
             spinner,
-            // Auto mode opens in `Working` — the greeter is already waiting on
+            // Auto mode opens in `Working`; the greeter is already waiting on
             // greetd for the first prompt (kicked by `AutoStart` below).
             stage: if auto_user {
                 Stage::Working
@@ -419,7 +419,7 @@ impl SimpleComponent for App {
             AppInput::UserSelected(idx) => self.switch_user(idx as usize),
             AppInput::AutoStart => {
                 if self.sessions.is_empty() {
-                    // Nothing to log into — leave the "no session" error up.
+                    // Nothing to log into: leave the "no session" error up.
                     self.stage = Stage::Username;
                 } else {
                     self.status_lbl.set_label("");
@@ -434,8 +434,8 @@ impl SimpleComponent for App {
 
 impl App {
     /// Spinner runs exactly while a greetd request is in flight. Driven from
-    /// one place (the end of `update`) so every path — submit, prompt,
-    /// cancel, error — stays in sync with `self.stage`.
+    /// one place (the end of `update`) so every path (submit, prompt,
+    /// cancel, error) stays in sync with `self.stage`.
     fn sync_busy(&self) {
         let busy = matches!(self.stage, Stage::Working | Stage::Starting);
         if busy {
@@ -469,7 +469,7 @@ impl App {
         match &self.stage {
             Stage::Username => {
                 if self.sessions.is_empty() {
-                    self.show_error("No session found — cannot log in");
+                    self.show_error("No session found: cannot log in");
                     return;
                 }
                 if text.is_empty() {
@@ -517,7 +517,7 @@ impl App {
     fn show_auth_entry(&mut self, message: &str, visible: bool) {
         // The prompt text goes in the placeholder; the status line stays for
         // Info/Error messages only (a preceding one is kept via
-        // `pam_status_held`, otherwise it's cleared — no echoing "Password:"
+        // `pam_status_held`, otherwise it's cleared: no echoing "Password:"
         // both in the field and under it).
         if !self.pam_status_held {
             self.status_lbl.remove_css_class("error");
@@ -549,7 +549,7 @@ impl App {
         self.dispatch(greetd::Command::StartSession { cmd, env });
     }
 
-    /// No account resolved up front — the greeter asks for the username.
+    /// No account resolved up front: the greeter asks for the username.
     fn typed_mode(&self) -> bool {
         self.users.is_empty()
     }
@@ -663,7 +663,7 @@ fn prompt_answer(text: String) -> Option<String> {
 
 /// Paints the configured wallpaper full-screen behind the login card. The
 /// image is loaded once as a `gdk_pixbuf::Pixbuf` and drawn by a
-/// `GtkDrawingArea` draw callback, so the pan costs no layout passes — the
+/// `GtkDrawingArea` draw callback, so the pan costs no layout passes; the
 /// drawing area fills the window and the draw callback applies the cover
 /// scale + Ken Burns offset itself. A missing/unreadable file or a non-image
 /// background leaves the card on the palette background color.

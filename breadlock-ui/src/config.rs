@@ -23,7 +23,7 @@ pub enum BackgroundMode {
 pub struct Background {
     pub mode: BackgroundMode,
     pub path: String,
-    /// v2 feature flag — no-op (with a warning) in v1, which only supports a
+    /// v2 feature flag: no-op (with a warning) in v1, which only supports a
     /// static color or image background.
     pub blur: bool,
     /// Slow Ken Burns pan on image backgrounds (a gentle drift + zoom instead
@@ -89,7 +89,7 @@ pub fn load_or_default<T: serde::de::DeserializeOwned + Default>(path: &Path) ->
             Ok(parsed) => parsed,
             Err(err) => {
                 eprintln!(
-                    "warning: failed to parse {}: {err} — using defaults",
+                    "warning: failed to parse {}: {err}; using defaults",
                     path.display()
                 );
                 T::default()

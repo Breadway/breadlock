@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run breadgreet in a nested compositor window on your current desktop so you
-# can actually drive the UI — type a username, a password, watch the spinner,
-# get the shake on a wrong password — without touching your real greeter or
+# can actually drive the UI: type a username, a password, watch the spinner,
+# get the shake on a wrong password, without touching your real greeter or
 # rebooting.
 #
 #   breadgreet/scripts/preview.sh            # cairo renderer (safe everywhere)
@@ -11,7 +11,7 @@
 # By default breadgreet enumerates your /etc/passwd users and skips straight to
 # the password prompt. Password is "bread"; any other password exercises the
 # auth-error path (shake + red status line). A correct login makes breadgreet
-# exit, as it would for real — that ends the script and closes the window.
+# exit, as it would for real; that ends the script and closes the window.
 # Ctrl-C in this terminal tears everything down at any point.
 #
 # The nested compositor opens as an ordinary window; float / resize it with
@@ -33,7 +33,7 @@ for arg in "$@"; do
 done
 
 if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
-    echo "no WAYLAND_DISPLAY — run this from inside your Wayland session" >&2
+    echo "no WAYLAND_DISPLAY: run this from inside your Wayland session" >&2
     exit 1
 fi
 : "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"

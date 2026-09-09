@@ -1,6 +1,6 @@
-# AGENTS.md — Repo hygiene
+# AGENTS.md: Repo hygiene
 
-Scope: this file covers *repo hygiene* — branching, remotes, CI, cleanup. It is not project documentation.
+Scope: this file covers *repo hygiene*: branching, remotes, CI, cleanup. It is not project documentation.
 
 ## Branch model
 - Single-trunk: `main` only. No `dev` or `beta` branch. Land small changes directly, or use short-lived `feature/x`/`fix/x` branches for anything non-trivial and merge back to `main`.
@@ -11,16 +11,19 @@ Scope: this file covers *repo hygiene* — branching, remotes, CI, cleanup. It i
 - Releases are `v*` tags. `.forgejo/workflows/package.yml` builds the `[breadway]` pacman package. There are no bakery tracks (`dev`/`beta`/`stable` indexes) for this repo.
 
 ## Remotes
-- `origin` — Forgejo (`git.breadway.dev`, SSH) — authoritative. Push here.
-- `github` — GitHub mirror (push-mirror; do not push to it by hand).
+- `origin`: Forgejo (`git.breadway.dev`, SSH), authoritative. Push here.
+- `github`: GitHub mirror (push-mirror; do not push to it by hand).
 
 ## CI
-- `.forgejo/workflows/package.yml` triggers only on `push: tags: ['v*']` — regular pushes to `main` run nothing. Tag a release to trigger packaging.
-- No build/lint/test CI runs on ordinary commits or PRs — test locally before merging.
+- `.forgejo/workflows/package.yml` triggers only on `push: tags: ['v*']`; regular pushes to `main` run nothing. Tag a release to trigger packaging.
+- No build/lint/test CI runs on ordinary commits or PRs; test locally before merging.
 
 ## Cleanup
 - Delete feature/fix branches (local + remote) once merged. Check with `git branch --merged main`.
 
 ## Don't
 - Don't add `bakery.toml`.
-- Don't embed credentials in remote URLs — SSH or a credential helper only.
+- Don't embed credentials in remote URLs; SSH or a credential helper only.
+
+## Persistent memory
+Read `~/.knowledge.md` at the start of a task: it points to a shared memory index at `~/.claude/memory/MEMORY.md` (also used by Claude Code). Selectively read the linked entries relevant to what you're working on.
