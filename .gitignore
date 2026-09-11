@@ -28,3 +28,4 @@ graphify-out/
 
 # breadlock-preview PNG output (dev-only animation harness)
 preview/
+.freebuff/
