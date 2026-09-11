@@ -264,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "breadgreet"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bread-theme",
  "breadlock-ui",
@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "breadlock"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bread-utils",
  "breadlock-ui",
@@ -307,7 +307,7 @@ dependencies = [
 
 [[package]]
 name = "breadlock-ui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bread-theme",
  "cosmic-text",
