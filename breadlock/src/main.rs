@@ -232,7 +232,7 @@ fn run_lock() {
     });
     status::spawn_poller(status_tx, config.status.now_playing, config.status.battery);
 
-    // Per-output palette cache invalidation: when pywal regenerates the
+    // Per-output palette cache invalidation: when bread-theme regenerates the
     // per-monitor palette/theme files, drop the cache and repaint once. The
     // cache itself is what keeps `redraw_surface` from re-parsing JSON off
     // disk on every animation frame.

@@ -1,5 +1,5 @@
 //! Watches the per-output palette / theme directories and notifies the event
-//! loop when pywal regenerates them.
+//! loop when bread-theme regenerates them.
 //!
 //! `state::AppState` caches the resolved [`breadlock_ui::theme::Palette`] per
 //! output name (`output_palettes`). Without this watcher that cache would

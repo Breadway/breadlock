@@ -85,9 +85,9 @@ pub struct AppState {
     /// Per-output resolved palette cache, keyed by `wl_output` name. Filled
     /// lazily by [`AppState::palette_for_surface`] so a redraw doesn't re-read
     /// and re-parse `palettes/<output>.json` from disk on every frame. Cleared
-    /// wholesale by the [`crate::theme_watch`] callback when pywal regenerates
-    /// the palette files. `RefCell` because `palette_for_surface` runs from
-    /// the `&self`-shaped middle of `redraw_surface` (other `&self` borrows
+    /// wholesale by the [`crate::theme_watch`] callback when bread-theme
+    /// regenerates the palette files. `RefCell` because `palette_for_surface`
+    /// runs from the `&self`-shaped middle of `redraw_surface` (other `&self` borrows
     /// are live), but only ever on the single event-loop thread.
     pub output_palettes:
         std::cell::RefCell<std::collections::HashMap<String, breadlock_ui::theme::Palette>>,
@@ -538,7 +538,7 @@ impl AppState {
     }
 
     /// Drop every cached per-output palette so the next redraw re-reads them.
-    /// Called by the [`crate::theme_watch`] callback on a pywal regeneration.
+    /// Called by the [`crate::theme_watch`] callback on a bread-theme regeneration.
     pub fn invalidate_palette_cache(&self) {
         self.output_palettes.borrow_mut().clear();
     }
