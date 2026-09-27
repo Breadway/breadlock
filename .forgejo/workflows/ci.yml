@@ -18,7 +18,11 @@ jobs:
       - name: Install build deps
         run: |
           set -euo pipefail
-          pacman -Syu --noconfirm base-devel git rust cargo clippy rustfmt \
+          # clippy and rustfmt are no longer separate Arch packages: current
+          # `rust` ships cargo-clippy/rustfmt itself, and asking pacman for
+          # packages named `clippy`/`rustfmt` fails the whole install step
+          # ("target not found").
+          pacman -Syu --noconfirm base-devel git rust cargo \
             libgit2 openssl pam wayland libxkbcommon gtk4
           git config --global --add safe.directory '*'
 
