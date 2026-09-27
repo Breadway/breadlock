@@ -251,8 +251,7 @@ impl AppState {
             }
             AuthState::AccountInvalid => Some("Account locked or expired".to_string()),
             AuthState::ConfigError => Some(
-                "PAM config error: check logs (breadlock service not set up correctly)"
-                    .to_string(),
+                "PAM config error: check logs (breadlock service not set up correctly)".to_string(),
             ),
             AuthState::Idle => None,
         };
