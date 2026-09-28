@@ -978,7 +978,8 @@ fn ellipsize(
 /// expects (BGRA bytes on little-endian, which is every target this ships
 /// on).
 pub fn blit_to_shm(pixmap: &Pixmap, shm_bytes: &mut [u8]) {
-    for (src, dst) in pixmap.pixels().iter().zip(shm_bytes.chunks_exact_mut(4)) {
+    let (chunks, _remainder) = shm_bytes.as_chunks_mut::<4>();
+    for (src, dst) in pixmap.pixels().iter().zip(chunks.iter_mut()) {
         dst[0] = src.blue();
         dst[1] = src.green();
         dst[2] = src.red();
