@@ -23,33 +23,94 @@ jobs:
           # packages named `clippy`/`rustfmt` fails the whole install step
           # ("target not found").
           pacman -Syu --noconfirm base-devel git rust cargo \
-            libgit2 openssl pam wayland libxkbcommon gtk4
+            libgit2 openssl pam wayland libxkbcommon gtk4 python-yaml
           git config --global --add safe.directory '*'
 
       - name: Checkout
+        shell: bash
         env:
-          BRANCH: ${{ github.head_ref || github.ref_name }}
+          EVENT_SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.number }}
         run: |
           set -euo pipefail
-          # Try the head/ref branch first (e.g. the PR branch); fall back to a
-          # plain default-branch clone so tags/merge refs still check out.
-          git clone --depth 1 --branch "$BRANCH" \
-            "https://git.breadway.dev/${GITHUB_REPOSITORY}.git" /src \
-            || git clone --depth 1 \
-              "https://git.breadway.dev/${GITHUB_REPOSITORY}.git" /src
+          repo_url="https://git.breadway.dev/${GITHUB_REPOSITORY}.git"
+          event_sha="${EVENT_SHA:?github.sha is empty}"
+          # Each job gets its own directory: never a shared /src.
+          src="$(mktemp -d "${RUNNER_TEMP:-/tmp}/breadlock-ci.XXXXXX")"
+          printf 'SRC_DIR=%s\n' "$src" >> "$GITHUB_ENV"
+
+          git init --quiet "$src"
+          git -C "$src" remote add origin "$repo_url"
+
+          # Fetch the event ref at depth 1. Never fall back to the default
+          # branch: if the event commit is not fetched, the step fails below.
+          refs=("${GITHUB_REF:?GITHUB_REF is empty}")
+          if [ -n "${PR_NUMBER:-}" ] && [ "$GITHUB_REF" != "refs/pull/${PR_NUMBER}/head" ]; then
+            refs+=("refs/pull/${PR_NUMBER}/head")
+          fi
+          for ref in "${refs[@]}"; do
+            if git -C "$src" fetch --quiet --depth 1 --no-tags origin "$ref"; then
+              echo "fetched ${ref}"
+            else
+              echo "could not fetch ${ref}; trying the remaining event refs" >&2
+            fi
+          done
+
+          if ! git -C "$src" cat-file -e "${event_sha}^{commit}" 2>/dev/null; then
+            echo "event commit ${event_sha} is not in ${GITHUB_REPOSITORY}; refusing to test another tree" >&2
+            exit 1
+          fi
+
+          git -C "$src" -c advice.detachedHead=false checkout --quiet --detach "$event_sha"
+          head_sha="$(git -C "$src" rev-parse HEAD)"
+          if [ "$head_sha" != "$event_sha" ]; then
+            echo "checked out ${head_sha}, expected the event commit ${event_sha}" >&2
+            exit 1
+          fi
+          echo "checked out ${event_sha} in ${src}"
+
+      - name: Workflow checkout regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SRC_DIR"
+          python3 ci/test-workflow-checkout.py
 
       - name: Format (rustfmt --check)
-        working-directory: /src
-        run: cargo fmt --all -- --check
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SRC_DIR"
+          cargo fmt --all -- --check
 
       - name: Lint (clippy, warnings as errors)
-        working-directory: /src
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SRC_DIR"
+          cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test (all targets)
-        working-directory: /src
-        run: cargo test --workspace --all-targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SRC_DIR"
+          cargo test --workspace --all-targets
 
       - name: Build (release, locked)
-        working-directory: /src
-        run: cargo build --release --locked
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SRC_DIR"
+          cargo build --release --locked
+
+      - name: Clean owned checkout
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${SRC_DIR:-}" in
+            "${RUNNER_TEMP:-/tmp}"/breadlock-ci.*)
+              rm -rf -- "$SRC_DIR"
+              ;;
+          esac
