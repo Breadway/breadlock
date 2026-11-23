@@ -1,4 +1,4 @@
-# breadlock: bread event integration
+# lock: bread event integration
 
 breadlock is a standalone session locker: it works exactly the same with
 or without `breadd` running. When breadd *is* present, `breadlock`
@@ -35,10 +35,10 @@ from session lock/unlock.
 
 ## Commands honored (`bread.command.lock.*`)
 
-| Verb | Effect |
-|------|--------|
-| `lock` | If a locker is already running, emit `bread.lock.lock.done` and do nothing else. Otherwise start `breadlock` the same way hypridle does (`lock_cmd = breadlock`: this binary, no args) and emit `done` or `failed`. |
-| `unlock` | If no locker is running, emit `bread.lock.unlock.done` (already unlocked) and do **not** call loginctl. If the locker is running, emit `bread.lock.unlock.failed`; bus clients must never trigger unlock. Compositor `unlock()` stays on the PAM path only. |
+| Verb | Data | Effect |
+|------|------|--------|
+| `lock` | none | If a locker is already running, emit `bread.lock.lock.done` and do nothing else. Otherwise start `breadlock` the same way hypridle does (`lock_cmd = breadlock`: this binary, no args) and emit `done` or `failed`. |
+| `unlock` | none | If no locker is running, emit `bread.lock.unlock.done` (already unlocked) and do **not** call loginctl. If the locker is running, emit `bread.lock.unlock.failed`; bus clients must never trigger unlock. Compositor `unlock()` stays on the PAM path only. |
 
 A Lua workflow that wants the session locked should `bread.wait` /
 `bread.wait_any` on `bread.lock.lock.done` (or `.failed`) with a timeout.
@@ -79,7 +79,7 @@ lock-session`. Compositor unlock after a typed password is still PAM
 on this process (`bread.lock.unlocked`); a dispatch-error or crash
 path still does **not** call compositor `unlock()` (fail-secure).
 
-### Not implemented: `pin` / `blur`
+## Not implemented
 
 `background.blur` in `breadlock.toml` remains a documented locker
 no-op (accepted, warned, surface drawn unblurred). That is appearance
