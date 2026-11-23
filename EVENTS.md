@@ -1,4 +1,4 @@
-# breadlock: bread event integration
+# lock: bread event integration
 
 breadlock is a standalone session locker: it works exactly the same with
 or without `breadd` running. When breadd *is* present, `breadlock`
